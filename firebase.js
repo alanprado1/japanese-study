@@ -70,16 +70,72 @@ function initFirebase() {
 }
 
 // ─── auth ────────────────────────────────────────────────────
+// Safari's Intelligent Tracking Prevention (ITP) partitions or blocks
+// sessionStorage in certain contexts (pages opened from other apps, Home Screen
+// PWAs, or when "Prevent Cross-Site Tracking" restricts storage). Firebase's
+// signInWithPopup probes sessionStorage before opening the popup; if the probe
+// throws a SecurityError, Firebase throws auth/operation-not-supported-in-this-environment
+// before the popup ever opens.
+//
+// Fix: detect Safari, probe sessionStorage safely, and if it's blocked switch
+// persistence to NONE (in-memory) before calling signInWithPopup. NONE bypasses
+// the storage probe entirely, so the popup opens normally. The trade-off is that
+// on affected Safari sessions the auth state won't survive a page refresh — but
+// that's fine because onAuthStateChanged + Firestore sync restores data immediately
+// on every sign-in anyway.
+//
+// Chrome and all other browsers are unaffected and continue to use LOCAL persistence.
+
+function _isSafari() {
+  var ua = navigator.userAgent;
+  // Safari reports "Safari" but NOT "Chrome" or "CriOS" or "FxiOS"
+  return /Safari/i.test(ua) && !/Chrome/i.test(ua) && !/CriOS/i.test(ua) && !/FxiOS/i.test(ua);
+}
+
+function _sessionStorageAvailable() {
+  // Probe sessionStorage safely — Safari ITP throws SecurityError on access
+  // in partitioned contexts; localStorage may also throw in private browsing.
+  try {
+    var key = '__fbTest__';
+    sessionStorage.setItem(key, '1');
+    sessionStorage.removeItem(key);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
 function signInWithGoogle() {
   if (!firebaseReady) return;
   var provider = new firebase.auth.GoogleAuthProvider();
-  firebaseAuth.signInWithPopup(provider).catch(function(err) {
-    // User closed the popup before completing sign-in — not a real error, ignore silently.
-    if (err.code === 'auth/popup-closed-by-user' ||
-        err.code === 'auth/cancelled-popup-request') return;
-    console.error('Sign in failed:', err);
-    alert('Sign in failed: ' + err.message);
-  });
+
+  // On Safari, if sessionStorage is blocked, set persistence to NONE first.
+  // NONE uses pure in-memory storage and bypasses Firebase's storage probe,
+  // allowing signInWithPopup to succeed. On all other browsers (or on Safari
+  // when storage is accessible) use the default LOCAL persistence.
+  var needsNonePersistence = _isSafari() && !_sessionStorageAvailable();
+
+  var doSignIn = function() {
+    firebaseAuth.signInWithPopup(provider).catch(function(err) {
+      // User closed the popup before completing sign-in — not a real error, ignore silently.
+      if (err.code === 'auth/popup-closed-by-user' ||
+          err.code === 'auth/cancelled-popup-request') return;
+      console.error('Sign in failed:', err);
+      alert('Sign in failed: ' + err.message);
+    });
+  };
+
+  if (needsNonePersistence) {
+    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.NONE)
+      .then(doSignIn)
+      .catch(function(err) {
+        // Fallback: just try the popup anyway — best effort
+        console.warn('setPersistence failed, attempting popup anyway:', err);
+        doSignIn();
+      });
+  } else {
+    doSignIn();
+  }
 }
 
 function signOut() {
