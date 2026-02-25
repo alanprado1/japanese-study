@@ -70,20 +70,11 @@ function initFirebase() {
 }
 
 // ─── auth ────────────────────────────────────────────────────
-// signInWithPopup works on all platforms — desktop and mobile browsers.
-// signInWithRedirect is NOT used because it requires a cross-origin iframe
-// that depends on third-party storage access. Safari 16.1+, Firefox 109+,
-// and Chrome 115+ block this by default, causing the error:
-//   "auth/operation-not-supported-in-this-environment —
-//    web storage must be enabled"
-// The Firebase docs confirm: if not hosted on Firebase Hosting, use
-// signInWithPopup. It works reliably on mobile browsers (iOS Safari,
-// Android Chrome) when the page is served over https.
 function signInWithGoogle() {
   if (!firebaseReady) return;
   var provider = new firebase.auth.GoogleAuthProvider();
   firebaseAuth.signInWithPopup(provider).catch(function(err) {
-    // User dismissed the popup — not an error, ignore silently
+    // User closed the popup before completing sign-in — not a real error, ignore silently.
     if (err.code === 'auth/popup-closed-by-user' ||
         err.code === 'auth/cancelled-popup-request') return;
     console.error('Sign in failed:', err);
