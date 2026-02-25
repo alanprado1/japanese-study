@@ -26,20 +26,6 @@ function initFirebase() {
     firebaseDB   = firebase.firestore();
     firebaseReady = true;
 
-    // On mobile, after a signInWithRedirect round-trip, getRedirectResult()
-    // must be called to complete the sign-in. It resolves immediately (with
-    // null result) on normal page loads, so it's safe to call unconditionally.
-    // The then() fires before onAuthStateChanged, ensuring auth state is set.
-    firebaseAuth.getRedirectResult().catch(function(err) {
-      if (err.code === 'auth/popup-closed-by-user' ||
-          err.code === 'auth/cancelled-popup-request') return;
-      // Only show an error if it's unexpected (not just a no-op)
-      if (err.code && err.code !== 'auth/no-auth-event') {
-        console.error('Redirect result error:', err);
-        alert('Sign in failed: ' + err.message);
-      }
-    });
-
     // Fires immediately on page load if session is already active,
     // OR after a fresh sign-in. Always pull cloud data either way.
     firebaseAuth.onAuthStateChanged(function(user) {
@@ -84,33 +70,25 @@ function initFirebase() {
 }
 
 // ─── auth ────────────────────────────────────────────────────
-// On mobile, signInWithPopup fails with auth/operation-not-supported
-// because mobile browsers block popups. Use signInWithRedirect instead,
-// which navigates away then back with the auth result handled in
-// getRedirectResult() called at the start of initFirebase.
-function isMobileDevice() {
-  return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-    || window.innerWidth <= 900;
-}
-
+// signInWithPopup works on all platforms — desktop and mobile browsers.
+// signInWithRedirect is NOT used because it requires a cross-origin iframe
+// that depends on third-party storage access. Safari 16.1+, Firefox 109+,
+// and Chrome 115+ block this by default, causing the error:
+//   "auth/operation-not-supported-in-this-environment —
+//    web storage must be enabled"
+// The Firebase docs confirm: if not hosted on Firebase Hosting, use
+// signInWithPopup. It works reliably on mobile browsers (iOS Safari,
+// Android Chrome) when the page is served over https.
 function signInWithGoogle() {
   if (!firebaseReady) return;
   var provider = new firebase.auth.GoogleAuthProvider();
-  if (isMobileDevice()) {
-    // Redirect flow: navigates away and back; result captured in initFirebase
-    firebaseAuth.signInWithRedirect(provider).catch(function(err) {
-      console.error('Redirect sign-in failed:', err);
-      alert('Sign in failed: ' + err.message);
-    });
-  } else {
-    // Popup flow: works reliably on desktop
-    firebaseAuth.signInWithPopup(provider).catch(function(err) {
-      if (err.code === 'auth/popup-closed-by-user' ||
-          err.code === 'auth/cancelled-popup-request') return;
-      console.error('Sign in failed:', err);
-      alert('Sign in failed: ' + err.message);
-    });
-  }
+  firebaseAuth.signInWithPopup(provider).catch(function(err) {
+    // User dismissed the popup — not an error, ignore silently
+    if (err.code === 'auth/popup-closed-by-user' ||
+        err.code === 'auth/cancelled-popup-request') return;
+    console.error('Sign in failed:', err);
+    alert('Sign in failed: ' + err.message);
+  });
 }
 
 function signOut() {
