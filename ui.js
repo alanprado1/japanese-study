@@ -37,10 +37,7 @@ function setTheme(t) {
 }
 
 document.querySelectorAll('.theme-dot').forEach(function(dot) {
-  dot.addEventListener('click', function() {
-    setTheme(dot.dataset.t);
-    collapseNavOnMobile();
-  });
+  dot.addEventListener('click', function() { setTheme(dot.dataset.t); });
 });
 
 // ─── translation toggle ───────────────────────────────────────
@@ -50,7 +47,6 @@ document.getElementById('btnToggleTranslation').addEventListener('click', functi
   btn.classList.toggle('active', showTranslation);
   btn.textContent = showTranslation ? 'Translation ON' : 'Translation OFF';
   try { localStorage.setItem('jpStudy_translation', showTranslation); } catch(e) {}
-  collapseNavOnMobile();
   render();
 });
 
@@ -61,7 +57,6 @@ document.getElementById('btnToggleFurigana').addEventListener('click', function(
   btn.classList.toggle('active', showFurigana);
   btn.textContent = showFurigana ? '振仮名 ON' : '振仮名 OFF';
   try { localStorage.setItem('jpStudy_furigana', showFurigana); } catch(e) {}
-  collapseNavOnMobile();
   render();
 });
 
@@ -80,14 +75,15 @@ function collapseNavOnMobile() {
 document.getElementById('btnListView').addEventListener('click', function() {
   isListView   = true;
   isReviewMode = false;
+  // Persist currentIdx NOW before any async Firebase pull can clobber it
   if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
   try {
     localStorage.setItem('jpStudy_isListView', 'true');
+    // Clear review-mode persistence so a refresh doesn't restore review mode
     localStorage.setItem('jpStudy_isReviewMode', 'false');
     localStorage.removeItem('jpStudy_reviewQueueIds');
     localStorage.removeItem('jpStudy_reviewIdx');
   } catch(e) {}
-  collapseNavOnMobile();
   applyViewState();
   render();
 });
@@ -95,14 +91,15 @@ document.getElementById('btnListView').addEventListener('click', function() {
 document.getElementById('btnCardView').addEventListener('click', function() {
   isListView   = false;
   isReviewMode = false;
+  // Persist currentIdx NOW before any async Firebase pull can clobber it
   if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
   try {
     localStorage.setItem('jpStudy_isListView', 'false');
+    // Clear review-mode persistence so a refresh doesn't restore review mode
     localStorage.setItem('jpStudy_isReviewMode', 'false');
     localStorage.removeItem('jpStudy_reviewQueueIds');
     localStorage.removeItem('jpStudy_reviewIdx');
   } catch(e) {}
-  collapseNavOnMobile();
   applyViewState();
   render();
 });
@@ -124,7 +121,6 @@ document.getElementById('btnReviewMode').addEventListener('click', function() {
   try { localStorage.setItem('jpStudy_isListView', 'false'); } catch(e) {}
   // Persist review session so a page refresh lands back in review mode
   if (typeof saveReviewState === 'function') saveReviewState();
-  collapseNavOnMobile();
   applyViewState();
   render();
 });
@@ -144,12 +140,6 @@ document.addEventListener('click', function(e) {
     settingsPanel.classList.remove('active');
     settingsBtn.classList.remove('active');
   }
-});
-
-// ─── settings btn click: also collapse nav on mobile ─────────────────
-// Tapping the gear collapses the nav so the panel is visible on small screens.
-settingsBtn.addEventListener('click', function() {
-  collapseNavOnMobile();
 });
 
 // ─── font size slider ─────────────────────────────────────────
@@ -173,19 +163,13 @@ function setWeight(btn) {
 function openAddModal()  { document.getElementById('addModal').classList.add('active'); }
 function closeAddModal() { document.getElementById('addModal').classList.remove('active'); }
 
-document.getElementById('btnAddSentences').addEventListener('click', function() {
-  collapseNavOnMobile();
-  openAddModal();
-});
+document.getElementById('btnAddSentences').addEventListener('click', openAddModal);
 document.getElementById('addModal').addEventListener('click', function(e) {
   if (e.target === this) closeAddModal();
 });
 
 // ─── deck modal ───────────────────────────────────────────────
-document.getElementById('btnDeckSelect').addEventListener('click', function() {
-  collapseNavOnMobile();
-  openDeckModal();
-});
+document.getElementById('btnDeckSelect').addEventListener('click', openDeckModal);
 document.getElementById('deckModal').addEventListener('click', function(e) {
   if (e.target === this) closeDeckModal();
 });
@@ -240,7 +224,6 @@ document.getElementById('btnDeleteMode').addEventListener('click', function() {
   btn.classList.toggle('active', isDeleteMode);
   btn.classList.toggle('btn-danger', isDeleteMode);
   btn.textContent = isDeleteMode ? '✕ Del ON' : '✕ Del';
-  collapseNavOnMobile();
   render();
 });
 document.addEventListener('keydown', function(e) {
@@ -292,8 +275,10 @@ function loadUIPrefs() {
   var lv = localStorage.getItem('jpStudy_isListView');
   if (lv === 'true') isListView = true;
 
-  // NOTE: currentLengthFilter is restored by loadCurrentLengthFilter() in
-  // app.js (deck-scoped). Do NOT restore it here from the old global key.
+  // NOTE: currentLengthFilter is NOT restored here.
+  // It is loaded by syncDeckToApp() inside initDecks(), which runs before
+  // loadUIPrefs(). The filter lives in the deck object and travels with it
+  // through localStorage and Firestore — no separate key needed.
 }
 
 // ─── mobile: nav toggle pill ─────────────────────────────────

@@ -38,20 +38,6 @@ function loadFilterIndexes() {
   } catch(e) { filterIndexes = {}; }
 }
 
-// Persist and restore currentLengthFilter scoped to the current deck.
-// All code that was writing jpStudy_lengthFilter (global) now calls these
-// helpers so each deck remembers its own active filter independently.
-function saveCurrentLengthFilter() {
-  try { localStorage.setItem('jpStudy_lengthFilter_' + currentDeckId, currentLengthFilter || ''); } catch(e) {}
-}
-
-function loadCurrentLengthFilter() {
-  try {
-    var raw = localStorage.getItem('jpStudy_lengthFilter_' + currentDeckId);
-    currentLengthFilter = (raw !== null && raw !== '') ? raw : null;
-  } catch(e) { currentLengthFilter = null; }
-}
-
 var LENGTH_LABELS = ['SHORT', 'MEDIUM', 'LONG', 'VERY LONG'];
 
 function getSentencesForFilter() {
@@ -65,8 +51,8 @@ function setLengthFilter(label) {
   var key = label.split(' ')[0];
   if (key === 'VERY') key = 'VERY LONG';
   currentLengthFilter = (currentLengthFilter === key) ? null : key;
-  saveCurrentLengthFilter();
   currentIdx = 0;
+  saveCurrentDeck(); // persists filter into deck object → localStorage + Firestore
   render();
 }
 
@@ -540,7 +526,6 @@ function toggleLengthPill(key) {
     saveFilterIndexes();
 
     currentLengthFilter = newFilter;
-    saveCurrentLengthFilter();
 
     // Rebuild review queue for the new filter
     var allDue = getDueCards();
@@ -573,7 +558,6 @@ function toggleLengthPill(key) {
     saveFilterIndexes();
 
     currentLengthFilter = newFilter;
-    saveCurrentLengthFilter();
 
     // Restore saved position for the new filter, clamped to new set length
     var savedIdx = filterIndexes[currentLengthFilter || ''] || 0;
@@ -581,6 +565,7 @@ function toggleLengthPill(key) {
     currentIdx   = (savedIdx < newSet.length) ? savedIdx : 0;
   }
 
+  saveCurrentDeck(); // persists filter into deck object → localStorage + Firestore
   render();
 }
 
@@ -667,19 +652,10 @@ function loadReviewState() {
 }
 
 // ─── init ────────────────────────────────────────────────────
-initDecks();              // decks.js  — loads deck data into globals (sentences, srsData, currentIdx)
-loadUIPrefs();            // ui.js     — restores theme, font, toggles, and sets isListView
-loadFilterIndexes();      // app.js    — restores per-filter card positions for current deck
-loadCurrentLengthFilter();// app.js    — restores active filter for current deck (deck-scoped)
-// Apply the saved per-filter position now that we know both the filter and the indexes
-(function() {
-  var _fi = filterIndexes[currentLengthFilter || ''];
-  if (_fi !== undefined) {
-    var _set = getSentencesForFilter();
-    currentIdx = (_fi < _set.length) ? _fi : Math.max(0, _set.length - 1);
-  }
-})();
-loadReviewState();        // app.js    — restores review mode session if one was in progress
+initDecks();         // decks.js  — loads deck data into globals (sentences, srsData, currentIdx)
+loadUIPrefs();       // ui.js     — restores theme, font, toggles, and sets isListView
+loadFilterIndexes(); // app.js    — restores per-filter card positions from localStorage
+loadReviewState();   // app.js    — restores review mode session if one was in progress
 loadVoicePref();     // tts.js    — restores selected voice
 loadFuriganaCache(); // load cached furigana readings from localStorage
 updateDeckUI();      // decks.js  — sets deck button label + modal content
