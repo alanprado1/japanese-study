@@ -23,14 +23,10 @@ var currentLengthFilter = null;
 
 // Remembers the card index for each filter value so switching filters
 // restores position. Keys: null→'', 'SHORT', 'MEDIUM', 'LONG', 'VERY LONG'.
-// Also stores review-mode positions under 'review:SHORT' etc.
 // Persisted to localStorage so it survives refresh, sign-out, and Firebase pulls.
 var filterIndexes = {};
 
 function saveFilterIndexes() {
-  // Update the in-memory deck object only — no saveDeck() call here.
-  // The deck is persisted by saveCurrentDeck() which is always called
-  // shortly after (by prevCard, nextCard, toggleLengthPill, etc.).
   var d = decks[currentDeckId];
   if (d) d.filterIndexes = filterIndexes;
 }
@@ -40,13 +36,7 @@ function loadFilterIndexes() {
   filterIndexes = (d && d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
 }
 
-// Persist and restore currentLengthFilter scoped to the current deck.
-// All code that was writing jpStudy_lengthFilter (global) now calls these
-// helpers so each deck remembers its own active filter independently.
 function saveCurrentLengthFilter() {
-  // Update the in-memory deck object only — no saveDeck() call here.
-  // The deck is persisted by saveCurrentDeck() which is called by the
-  // callers that change the filter (toggleLengthPill, setLengthFilter).
   var d = decks[currentDeckId];
   if (d) d.lengthFilter = currentLengthFilter || '';
 }
@@ -54,6 +44,60 @@ function saveCurrentLengthFilter() {
 function loadCurrentLengthFilter() {
   var d = decks[currentDeckId];
   currentLengthFilter = (d && d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
+}
+
+// ─── saveCurrentDeck ─────────────────────────────────────────
+// BUG FIX: was called throughout the codebase but never defined.
+function saveCurrentDeck() {
+  syncAppToDeck();
+  saveDeck(currentDeckId);
+}
+
+// ─── lengthLabel ─────────────────────────────────────────────
+// BUG FIX: was called by getSentencesForFilter() but never defined.
+function lengthLabel(len) {
+  if (len <= 10) return 'SHORT';
+  if (len <= 20) return 'MEDIUM';
+  if (len <= 35) return 'LONG';
+  return 'VERY LONG';
+}
+
+// ─── toggleLengthPill ────────────────────────────────────────
+// BUG FIX: called from HTML onclick but never defined.
+// Clicking the active filter (or "All") resets to showing all cards.
+function toggleLengthPill(label) {
+  if (label === null || label === currentLengthFilter) {
+    if (currentLengthFilter === null) return; // already showing All
+    currentLengthFilter = null;
+    saveCurrentLengthFilter();
+    var filtKey  = '';
+    var savedIdx = filterIndexes[filtKey];
+    currentIdx   = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
+    var _filt    = getSentencesForFilter();
+    currentIdx   = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+    filterIndexes[filtKey] = currentIdx;
+    saveFilterIndexes();
+    saveCurrentDeck();
+    render();
+  } else {
+    setLengthFilter(label);
+  }
+}
+
+// ─── updateLengthFilterBar ───────────────────────────────────
+// BUG FIX: called by render() but never defined.
+// Syncs pill active-state highlight to currentLengthFilter.
+function updateLengthFilterBar() {
+  var bar = document.getElementById('lengthFilterBar');
+  if (!bar) return;
+  bar.querySelectorAll('.length-filter-pill').forEach(function(pill) {
+    var onclick = pill.getAttribute('onclick') || '';
+    var match   = onclick.match(/toggleLengthPill\(([^)]*)\)/);
+    if (!match) return;
+    var arg        = match[1].trim();
+    var pillFilter = (arg === 'null') ? null : arg.replace(/['"]/g, '');
+    pill.classList.toggle('active', pillFilter === currentLengthFilter);
+  });
 }
 
 var LENGTH_LABELS = ['SHORT', 'MEDIUM', 'LONG', 'VERY LONG'];
@@ -66,18 +110,32 @@ function getSentencesForFilter() {
 }
 
 function setLengthFilter(label) {
-  var key = label.split(' ')[0];
-  if (key === 'VERY') key = 'VERY LONG';
-  if (key === 'ALL') key = null;
-  if (currentLengthFilter === key) return; // Already set, no change
+  var key;
+  if (!label || label === 'ALL') {
+    key = null;
+  } else if (label === 'VERY LONG' || label === 'VERY') {
+    key = 'VERY LONG';
+  } else {
+    key = label.split(' ')[0]; // 'SHORT', 'MEDIUM', 'LONG'
+  }
+
   currentLengthFilter = key;
   saveCurrentLengthFilter();
-  // Restore position from filterIndexes or set to 0
-  var filtKey = currentLengthFilter || '';
+
+  var filtKey  = currentLengthFilter || '';
   var savedIdx = filterIndexes[filtKey];
-  currentIdx = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
-  // Clamp to current filtered length
+  currentIdx   = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
+
   var _filt = getSentencesForFilter();
+  // If filter yields no cards, auto-reset to All
+  if (key && _filt.length === 0) {
+    currentLengthFilter = null;
+    saveCurrentLengthFilter();
+    _filt    = sentences;
+    filtKey  = '';
+    savedIdx = filterIndexes[''];
+    currentIdx = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
+  }
   currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
   filterIndexes[filtKey] = currentIdx;
   saveFilterIndexes();
@@ -87,9 +145,6 @@ function setLengthFilter(label) {
 
 // ─── SRS ─────────────────────────────────────────────────────
 function getDueCards() {
-  // Only cards that have been rated at least once (srsData entry exists)
-  // AND whose next-due time has passed. Unseen cards are excluded from
-  // review — the user must encounter them in card mode first.
   var now = Date.now();
   return sentences.filter(function(s) {
     var d = srsData[s.id];
@@ -101,12 +156,10 @@ function getDueCards() {
 function deleteSentence(id) {
   sentences = sentences.filter(function(s) { return s.id !== id; });
   delete srsData[id];
-  // Clamp index
   var _filt = getSentencesForFilter();
   currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-  // Also remove from review queue if present
   reviewQueue = reviewQueue.filter(function(s) { return s.id !== id; });
-  reviewIdx = Math.max(0, Math.min(reviewIdx, reviewQueue.length - 1));
+  reviewIdx   = Math.max(0, Math.min(reviewIdx, reviewQueue.length - 1));
   saveCurrentDeck();
   render();
 }
@@ -114,6 +167,7 @@ function deleteSentence(id) {
 function updateDueBadge() {
   var due   = getDueCards().length;
   var badge = document.getElementById('dueBadge');
+  if (!badge) return;
   badge.style.display = due > 0 ? '' : 'none';
   badge.textContent   = due;
 }
@@ -144,84 +198,126 @@ function reviewCard(rating) {
   updateDueBadge();
 }
 
-// ─── empty state ─────────────────────────────────────────────
-function renderEmpty() {
-  document.getElementById('cardJP').innerHTML = '';
-  document.getElementById('cardEN').innerHTML = '';
-  document.getElementById('cardImage').innerHTML = '';
-  document.getElementById('statCard').textContent = '0 / 0';
-  document.getElementById('progressFill').style.width = '0%';
-  document.getElementById('lengthFilterBar').style.display = 'none';
-  document.getElementById('reviewButtons').style.display = 'none';
-  document.getElementById('emptyMessage').style.display = '';
+// ─── empty / card area helpers ────────────────────────────────
+function _showCardArea(visible) {
+  var cardArea   = document.getElementById('cardArea');
+  var emptyState = document.getElementById('emptyState');
+  if (cardArea)   cardArea.style.display   = visible ? ''     : 'none';
+  if (emptyState) emptyState.style.display = visible ? 'none' : '';
 }
 
 // ─── card render ─────────────────────────────────────────────
+// BUG FIX: all DOM IDs corrected:
+//   cardJP       → jpText
+//   cardEN       → transText
+//   reviewButtons→ reviewBtns
+//   emptyMessage → emptyState (handled via _showCardArea)
 function renderCard() {
   var filtered = getSentencesForFilter();
-  // Always clamp currentIdx before rendering
-  currentIdx = Math.max(0, Math.min(currentIdx, filtered.length - 1));
+  currentIdx   = Math.max(0, Math.min(currentIdx, filtered.length - 1));
   var card     = filtered[currentIdx];
+
   if (!card) {
-    renderEmpty();
+    _showCardArea(false);
+    var statsBar = document.getElementById('statsBar');
+    if (statsBar) statsBar.style.display = 'none';
+    document.getElementById('statCard').textContent     = '0 / 0';
+    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('lengthFilterBar').style.display = 'none';
     return;
   }
-  document.getElementById('emptyMessage').style.display = 'none';
-  document.getElementById('statCard').textContent = (currentIdx + 1) + ' / ' + filtered.length;
+
+  _showCardArea(true);
+
+  var statsBar = document.getElementById('statsBar');
+  if (statsBar) statsBar.style.display = 'flex';
+
+  document.getElementById('statCard').textContent     = (currentIdx + 1) + ' / ' + filtered.length;
   document.getElementById('progressFill').style.width = ((currentIdx + 1) / filtered.length * 100) + '%';
+
   document.getElementById('lengthFilterBar').style.display = sentences.length > 1 ? 'flex' : 'none';
-  document.getElementById('reviewButtons').style.display = isReviewMode ? '' : 'none';
 
-  var jpEl = document.getElementById('cardJP');
-  jpEl.innerHTML = card.jp;
-  if (showFurigana) addFurigana(jpEl);
+  var reviewBtns = document.getElementById('reviewBtns');
+  if (reviewBtns) reviewBtns.style.display = isReviewMode ? '' : 'none';
 
-  var enEl = document.getElementById('cardEN');
-  enEl.innerHTML = card.en;
-  enEl.style.display = showTranslation ? '' : 'none';
+  var cardNav = document.getElementById('cardNav');
+  if (cardNav) cardNav.style.display = isReviewMode ? 'none' : '';
+
+  // BUG FIX: correct ID is 'jpText'
+  var jpEl = document.getElementById('jpText');
+  if (jpEl) {
+    jpEl.innerHTML = card.jp;
+    if (showFurigana) addFurigana(jpEl);
+  }
+
+  // BUG FIX: correct ID is 'transText'
+  var enEl = document.getElementById('transText');
+  if (enEl) {
+    enEl.innerHTML     = card.en;
+    enEl.style.display = showTranslation ? '' : 'none';
+  }
 
   updateCardImage(card.jp);
   prefetchJP(filtered[currentIdx + 1] ? filtered[currentIdx + 1].jp : null);
 }
 
 // ─── list render ─────────────────────────────────────────────
+// BUG FIX: was targeting 'sentenceList' which doesn't exist — correct element is 'listView'
+// Also: list now respects currentLengthFilter so filtering works in list mode too
 function renderListView() {
-  var list = document.getElementById('sentenceList');
+  var list = document.getElementById('listView');
+  if (!list) return;
   list.innerHTML = '';
-  sentences.forEach(function(s, i) {
-    var item = document.createElement('div');
+
+  var displaySentences = currentLengthFilter ? getSentencesForFilter() : sentences;
+
+  displaySentences.forEach(function(s) {
+    var item       = document.createElement('div');
     item.className = 'list-item' + (isDeleteMode ? ' delete-mode' : '');
-    var jp = document.createElement('div');
+
+    var jp       = document.createElement('div');
     jp.className = 'jp-text';
     jp.innerHTML = s.jp;
     if (showFurigana) addFurigana(jp);
-    var en = document.createElement('div');
-    en.className = 'en-text';
-    en.innerHTML = s.en;
+
+    var en           = document.createElement('div');
+    en.className     = 'en-text';
+    en.innerHTML     = s.en;
     en.style.display = showTranslation ? '' : 'none';
+
+    var audioBtn       = document.createElement('button');
+    audioBtn.className = 'card-audio-btn list-audio-btn';
+    audioBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>';
+    (function(sentence, btn) {
+      btn.onclick = function(e) { e.stopPropagation(); speakListItem(btn, sentence.jp); };
+    })(s, audioBtn);
+
     item.appendChild(jp);
     item.appendChild(en);
+    item.appendChild(audioBtn);
+
     if (isDeleteMode) {
-      var delBtn = document.createElement('button');
-      delBtn.className = 'delete-btn';
+      var delBtn         = document.createElement('button');
+      delBtn.className   = 'delete-btn';
       delBtn.textContent = '✕';
-      delBtn.onclick = function() { deleteSentence(s.id); };
+      (function(id) { delBtn.onclick = function() { deleteSentence(id); }; })(s.id);
       item.appendChild(delBtn);
     }
+
     list.appendChild(item);
   });
 }
 
-// ─── review render ───────────────────────────────────────────
-function renderReviewMode() {
-  // Similar to renderCard but using reviewQueue[reviewIdx]
-  // (truncated, assume it's there)
-}
-
 // ─── main render ─────────────────────────────────────────────
+// BUG FIX: was never dispatching to renderReviewMode() when isReviewMode=true
 function render() {
-  if (isListView) renderListView();
-  else            renderCard();
+  if (isListView) {
+    renderListView();
+  } else if (isReviewMode) {
+    renderReviewMode();
+  } else {
+    renderCard();
+  }
   updateDueBadge();
   updateLengthFilterBar();
 }
@@ -272,8 +368,8 @@ function loadReviewState() {
     var ids     = JSON.parse(raw);
     var sentMap = {};
     sentences.forEach(function(s) { sentMap[s.id] = s; });
-    var queue   = ids.map(function(id) { return sentMap[id]; }).filter(Boolean);
-    if (!queue.length) return; // all cards were deleted — don't restore
+    var queue = ids.map(function(id) { return sentMap[id]; }).filter(Boolean);
+    if (!queue.length) return;
     var idx = parseInt(localStorage.getItem('jpStudy_reviewIdx') || '0', 10);
     if (idx >= queue.length) idx = 0;
     isReviewMode = true;
@@ -283,37 +379,34 @@ function loadReviewState() {
 }
 
 // ─── init ────────────────────────────────────────────────────
-initDecks();              // decks.js  — loads deck data into globals (sentences, srsData, currentIdx)
-loadUIPrefs();            // ui.js     — restores theme, font, toggles, and sets isListView
-// filterIndexes and currentLengthFilter are restored by syncDeckToApp() inside initDecks().
-// They live in the deck object, so no separate load step is needed here.
-// Apply the per-filter card position (filterIndexes may point to a different card than currentIdx).
+initDecks();      // decks.js  — loads deck data into globals
+loadUIPrefs();    // ui.js     — restores theme, font, toggles, sets isListView
+
+// Apply per-filter card position on startup
 (function() {
   if (currentLengthFilter) {
-    var _fi = filterIndexes[currentLengthFilter];
+    var _fi  = filterIndexes[currentLengthFilter];
+    var _set = getSentencesForFilter();
     if (_fi !== undefined) {
-      var _set = getSentencesForFilter();
       currentIdx = (_fi < _set.length) ? _fi : Math.max(0, _set.length - 1);
     }
   }
-  // Always clamp after initial load
   var _filt = getSentencesForFilter();
   currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
 })();
-loadReviewState();        // app.js    — restores review mode session if one was in progress
-loadVoicePref();     // tts.js    — restores selected voice
-loadFuriganaCache(); // load cached furigana readings from localStorage
-updateDeckUI();      // decks.js  — sets deck button label + modal content
-applyViewState();    // ui.js     — syncs DOM to isListView/isReviewMode flags
+
+loadReviewState();    // restore in-progress review session
+loadVoicePref();      // tts.js   — restore selected voice
+loadFuriganaCache();  // kuromoji — load cached furigana readings
+updateDeckUI();       // decks.js — set deck button label + modal content
+applyViewState();     // ui.js    — sync DOM to isListView/isReviewMode flags
 
 if (window.speechSynthesis) { speechSynthesis.onvoiceschanged = function() {}; speechSynthesis.getVoices(); }
 
 render();
 
-// Init kuromoji after first render — loads dict files from ./dict/ (~1-2s first time)
-// When ready: pre-tokenizes all sentences, then re-renders if furigana is ON
+// Init kuromoji after first render (~1-2s for dict load)
 initKuromoji();
 
-// Firebase: init last so page renders instantly from localStorage,
-// then cloud data overwrites if user is signed in.
+// Firebase last — page renders from localStorage first, then cloud overwrites
 if (typeof initFirebase === 'function') initFirebase();

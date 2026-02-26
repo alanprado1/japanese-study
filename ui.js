@@ -4,7 +4,6 @@
    ============================================================ */
 
 // ─── apply view state to DOM ──────────────────────────────────
-// Called on init and after deck switch so DOM always matches isListView
 function applyViewState() {
   var flashcard = document.getElementById('flashcardView');
   var listView  = document.getElementById('listView');
@@ -65,7 +64,7 @@ document.getElementById('btnToggleFurigana').addEventListener('click', function(
   render();
 });
 
-// ─── helper: collapse nav on mobile when switching modes ─────
+// ─── helper: collapse nav on mobile ──────────────────────────
 function collapseNavOnMobile() {
   if (window.innerWidth <= 768) {
     document.querySelector('header').classList.add('header-hidden');
@@ -73,10 +72,6 @@ function collapseNavOnMobile() {
 }
 
 // ─── view toggle ─────────────────────────────────────────────
-// Standard mode toggles — no header side effects.
-// The header-hidden class is only ever controlled by the mobile nav pill.
-// Keeping these buttons clean/standard means future features can build
-// on them without undoing header-collapse state unexpectedly.
 document.getElementById('btnListView').addEventListener('click', function() {
   isListView   = true;
   isReviewMode = false;
@@ -110,15 +105,14 @@ document.getElementById('btnCardView').addEventListener('click', function() {
 // ─── review mode ─────────────────────────────────────────────
 document.getElementById('btnReviewMode').addEventListener('click', function() {
   var due = getDueCards();
-  // Apply active length filter so review queue matches the currently visible set
   if (currentLengthFilter) {
     due = due.filter(function(s) { return lengthLabel(s.jp.length) === currentLengthFilter; });
   }
   if (!due.length) { alert('No cards due for review.'); return; }
-  reviewQueue = due.sort(function(a, b) { return srsData[a.id].due - srsData[b.id].due; });
-  reviewIdx = 0;
+  reviewQueue  = due.sort(function(a, b) { return srsData[a.id].due - srsData[b.id].due; });
+  reviewIdx    = 0;
   isReviewMode = true;
-  isListView = false;
+  isListView   = false;
   saveReviewState();
   try { localStorage.setItem('jpStudy_isListView', 'false'); } catch(e) {}
   collapseNavOnMobile();
@@ -137,37 +131,98 @@ function exitReviewMode() {
   render();
 }
 
+// ─── renderReviewMode ─────────────────────────────────────────
+// BUG FIX: corrected all wrong DOM IDs:
+//   cardJP        → jpText
+//   cardEN        → transText
+//   reviewButtons → reviewBtns
+//   emptyMessage  → emptyState (hidden via _showCardArea)
 function renderReviewMode() {
   var card = reviewQueue[reviewIdx];
   if (!card) return exitReviewMode();
-  document.getElementById('statCard').textContent = (reviewIdx + 1) + ' / ' + reviewQueue.length;
+
+  // Ensure card area is visible, empty state hidden
+  var cardArea   = document.getElementById('cardArea');
+  var emptyState = document.getElementById('emptyState');
+  if (cardArea)   cardArea.style.display   = '';
+  if (emptyState) emptyState.style.display = 'none';
+
+  var statsBar = document.getElementById('statsBar');
+  if (statsBar) statsBar.style.display = 'flex';
+
+  document.getElementById('statCard').textContent     = (reviewIdx + 1) + ' / ' + reviewQueue.length;
   document.getElementById('progressFill').style.width = ((reviewIdx + 1) / reviewQueue.length * 100) + '%';
   document.getElementById('lengthFilterBar').style.display = 'none';
-  document.getElementById('reviewButtons').style.display = '';
-  document.getElementById('emptyMessage').style.display = 'none';
 
-  var jpEl = document.getElementById('cardJP');
-  jpEl.innerHTML = card.jp;
-  if (showFurigana) addFurigana(jpEl);
+  // BUG FIX: correct ID is 'reviewBtns', not 'reviewButtons'
+  var reviewBtns = document.getElementById('reviewBtns');
+  if (reviewBtns) reviewBtns.style.display = '';
 
-  var enEl = document.getElementById('cardEN');
-  enEl.innerHTML = card.en;
-  enEl.style.display = showTranslation ? '' : 'none';
+  // Hide the prev/next nav in review mode
+  var cardNav = document.getElementById('cardNav');
+  if (cardNav) cardNav.style.display = 'none';
+
+  // BUG FIX: correct ID is 'jpText', not 'cardJP'
+  var jpEl = document.getElementById('jpText');
+  if (jpEl) {
+    jpEl.innerHTML = card.jp;
+    if (showFurigana) addFurigana(jpEl);
+  }
+
+  // BUG FIX: correct ID is 'transText', not 'cardEN'
+  var enEl = document.getElementById('transText');
+  if (enEl) {
+    enEl.innerHTML     = card.en;
+    enEl.style.display = showTranslation ? '' : 'none';
+  }
 
   updateCardImage(card.jp);
   prefetchJP(reviewQueue[reviewIdx + 1] ? reviewQueue[reviewIdx + 1].jp : null);
+  updateDueBadge();
 }
 
 // ─── add modal ───────────────────────────────────────────────
-function openAddModal()  { document.getElementById('addModal').classList.add('active'); document.getElementById('sentenceInput').focus(); }
-function closeAddModal() { document.getElementById('addModal').classList.remove('active'); if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile(); }
+function openAddModal()  {
+  document.getElementById('addModal').classList.add('active');
+  document.getElementById('sentenceInput').focus();
+}
+function closeAddModal() {
+  document.getElementById('addModal').classList.remove('active');
+  if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile();
+}
 
-// ─── settings modal ──────────────────────────────────────────
-function openSettings()  { document.getElementById('settingsModal').classList.add('active'); }
-function closeSettings() { document.getElementById('settingsModal').classList.remove('active'); if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile(); }
+// BUG FIX: btnAddSentences had no event listener attached
+document.getElementById('btnAddSentences').addEventListener('click', function() {
+  collapseNavOnMobile();
+  openAddModal();
+});
 
-document.getElementById('btnSettings').addEventListener('click', openSettings);
-document.getElementById('settingsModal').addEventListener('click', function(e) { if (e.target === this) closeSettings(); });
+// ─── settings panel ──────────────────────────────────────────
+// BUG FIX: was referencing 'settingsModal' which doesn't exist — correct ID is 'settingsPanel'
+function openSettings()  { document.getElementById('settingsPanel').classList.add('active'); }
+function closeSettings() {
+  document.getElementById('settingsPanel').classList.remove('active');
+  if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile();
+}
+
+document.getElementById('btnSettings').addEventListener('click', function() {
+  var panel = document.getElementById('settingsPanel');
+  if (panel.classList.contains('active')) {
+    closeSettings();
+  } else {
+    openSettings();
+  }
+});
+
+// Close settings panel when clicking outside it
+document.addEventListener('click', function(e) {
+  var panel   = document.getElementById('settingsPanel');
+  var btnGear = document.getElementById('btnSettings');
+  if (!panel || !panel.classList.contains('active')) return;
+  if (!panel.contains(e.target) && e.target !== btnGear && !btnGear.contains(e.target)) {
+    closeSettings();
+  }
+});
 
 document.getElementById('fontSizeSlider').addEventListener('input', function() {
   var size = this.value + 'rem';
@@ -204,25 +259,21 @@ document.getElementById('btnNewDeck').addEventListener('click', function() {
   var name = prompt('New deck name:');
   if (!name || !name.trim()) return;
 
-  // Save state of current deck first
   syncAppToDeck();
   saveDeck(currentDeckId);
 
-  // Create deck in memory + localStorage only (no Firestore yet)
   var id = 'deck_' + Date.now();
-  decks[id] = { name: name.trim(), sentences: [], srsData: {}, currentIdx: 0 };
+  decks[id] = { name: name.trim(), sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
   try {
-    localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({ name: name.trim(), sentences: [], srsData: {}, currentIdx: 0 }));
+    localStorage.setItem('jpStudy_deck_' + id, JSON.stringify(decks[id]));
   } catch(e) {}
 
   closeDeckModal();
 
-  // Switch to new deck — set currentDeckId BEFORE any Firestore push
   currentDeckId = id;
   localStorage.setItem('jpStudy_currentDeck', id);
   syncDeckToApp();
 
-  // Now push to Firestore with the correct currentDeckId already set
   if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
   if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 
@@ -253,13 +304,14 @@ document.getElementById('btnDeleteMode').addEventListener('click', function() {
   collapseNavOnMobile();
   render();
 });
+
 document.addEventListener('keydown', function(e) {
   if (document.getElementById('addModal').classList.contains('active'))  return;
   if (document.getElementById('deckModal').classList.contains('active')) return;
   if (e.key === 'ArrowRight' || e.key === 'l') nextCard();
   if (e.key === 'ArrowLeft'  || e.key === 'h') prevCard();
   if (e.key === 't') document.getElementById('btnToggleTranslation').click();
-  if (e.key === 'Escape') { closePopup(); closeAddModal(); closeDeckModal(); }
+  if (e.key === 'Escape') { closePopup(); closeAddModal(); closeDeckModal(); closeSettings(); }
 });
 
 // ─── load all saved UI preferences ───────────────────────────
@@ -298,16 +350,11 @@ function loadUIPrefs() {
     });
   }
 
-  // Restore list vs card view — set isListView so applyViewState works correctly
   var lv = localStorage.getItem('jpStudy_isListView');
   if (lv === 'true') isListView = true;
-
-  // NOTE: currentLengthFilter is restored by loadCurrentLengthFilter() in
-  // app.js (deck-scoped). Do NOT restore it here from the old global key.
 }
 
 // ─── mobile: nav toggle pill ─────────────────────────────────
-// Header starts visible. Only the pill button toggles it.
 document.getElementById('btnMobileNav').addEventListener('click', function() {
   var headerEl = document.querySelector('header');
   headerEl.classList.toggle('header-hidden');
