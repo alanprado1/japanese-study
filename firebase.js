@@ -19,6 +19,15 @@ var currentUser   = null;
 var firebaseReady = false;
 
 // ─── init ────────────────────────────────────────────────────
+// Guard: prevents a second pull from running while one is already in flight.
+// On Safari with NONE persistence, onAuthStateChanged can fire twice in quick
+// succession (once on setPersistence resolve, once on signInWithPopup resolve).
+// Without this guard the second pull replaces `decks` mid-render, leaving
+// filterIndexes pointing at the old (now-orphaned) deck object and causing
+// the page to become unresponsive.
+var _pullInProgress = false;
+var _lastPullUid    = null;
+
 function initFirebase() {
   try {
     firebaseApp  = firebase.initializeApp(firebaseConfig);
@@ -33,6 +42,12 @@ function initFirebase() {
       updateAuthUI();
 
       if (user) {
+        // If a pull is already running for this user, skip — the in-flight
+        // pull will call render/updateDeckUI when it finishes.
+        if (_pullInProgress && _lastPullUid === user.uid) return;
+        _pullInProgress = true;
+        _lastPullUid    = user.uid;
+
         pullFromFirestore().then(function() {
           // syncDeckToApp restores sentences, srsData, currentIdx, filterIndexes,
           // and currentLengthFilter directly from the deck object — which now
@@ -51,7 +66,13 @@ function initFirebase() {
           updateDeckUI();
         }).catch(function(e) {
           console.warn('Pull failed:', e);
+        }).finally(function() {
+          _pullInProgress = false;
         });
+      } else {
+        // User signed out — reset guard so next sign-in pulls fresh
+        _pullInProgress = false;
+        _lastPullUid    = null;
       }
     });
 
