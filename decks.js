@@ -24,7 +24,8 @@ function saveDeck(id) {
   if (!d) return;
   try {
     localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({
-      name: d.name, sentences: d.sentences, srsData: d.srsData, currentIdx: d.currentIdx
+      name: d.name, sentences: d.sentences, srsData: d.srsData, currentIdx: d.currentIdx,
+      filterIndexes: d.filterIndexes || {}, lengthFilter: d.lengthFilter || ''
     }));
   } catch(e) { console.warn('saveDeck quota exceeded?', e); }
   // Mirror to Firestore if signed in
@@ -67,20 +68,22 @@ function initDecks() {
       Object.keys(meta).forEach(function(id) {
         var data   = loadDeckFromStorage(id);
         decks[id]  = data || { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0 };
-        decks[id].sentences  = decks[id].sentences  || [];
-        decks[id].srsData    = decks[id].srsData    || {};
-        decks[id].currentIdx = decks[id].currentIdx || 0;
+        decks[id].sentences     = decks[id].sentences     || [];
+        decks[id].srsData       = decks[id].srsData       || {};
+        decks[id].currentIdx    = decks[id].currentIdx    || 0;
+        decks[id].filterIndexes = decks[id].filterIndexes || {};
+        decks[id].lengthFilter  = decks[id].lengthFilter  !== undefined ? decks[id].lengthFilter : '';
       });
       var saved = localStorage.getItem('jpStudy_currentDeck');
       currentDeckId = (saved && decks[saved]) ? saved : Object.keys(decks)[0];
     } else {
-      decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0 };
+      decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
       currentDeckId = 'default';
       saveDeck('default');
       saveDeckList();
     }
   } catch(e) {
-    decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0 };
+    decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
     currentDeckId = 'default';
   }
 
@@ -91,17 +94,26 @@ function initDecks() {
 function syncDeckToApp() {
   var d = decks[currentDeckId];
   if (!d) return;
-  sentences  = d.sentences;
-  srsData    = d.srsData;
-  currentIdx = (d.currentIdx < d.sentences.length) ? d.currentIdx : 0;
+  sentences      = d.sentences;
+  srsData        = d.srsData;
+  currentIdx     = (d.currentIdx < d.sentences.length) ? d.currentIdx : 0;
+  // Restore per-deck filter state directly from the deck object.
+  // These are stored inside the deck so they travel with it through
+  // Firestore and localStorage with zero special handling.
+  if (typeof filterIndexes !== 'undefined')
+    filterIndexes = (d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
+  if (typeof currentLengthFilter !== 'undefined')
+    currentLengthFilter = (d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
 }
 
 function syncAppToDeck() {
   var d = decks[currentDeckId];
   if (!d) return;
-  d.sentences  = sentences;
-  d.srsData    = srsData;
-  d.currentIdx = currentIdx;
+  d.sentences     = sentences;
+  d.srsData       = srsData;
+  d.currentIdx    = currentIdx;
+  if (typeof filterIndexes     !== 'undefined') d.filterIndexes = filterIndexes;
+  if (typeof currentLengthFilter !== 'undefined') d.lengthFilter = currentLengthFilter || '';
 }
 
 function saveCurrentDeck() {
@@ -128,26 +140,8 @@ function switchDeck(id) {
   localStorage.setItem('jpStudy_currentDeck', id);
   syncDeckToApp(); // loads sentences/srsData/currentIdx for new deck
 
-  // ── 3. Load the INCOMING deck's filter state ─────────────────────────
-  // Reset in-memory filterIndexes first so no old-deck positions bleed in.
-  if (typeof filterIndexes !== 'undefined') filterIndexes = {};
-  if (typeof loadFilterIndexes         === 'function') loadFilterIndexes();
-  if (typeof loadCurrentLengthFilter   === 'function') loadCurrentLengthFilter();
-
-  // ── 4. Apply the per-filter card position for the new deck ───────────
-  // filterIndexes[currentLengthFilter||''] is the authoritative position
-  // for the now-active filter. Fall back to d.currentIdx (the "All" position
-  // stored in the deck object) if no per-filter entry exists yet.
-  if (typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
-    var _fi   = filterIndexes[currentLengthFilter || ''];
-    var _filt = getSentencesForFilter();
-    if (_fi !== undefined) {
-      currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
-    } else {
-      // No per-filter entry yet — clamp the deck's stored currentIdx
-      currentIdx = (currentIdx < _filt.length) ? currentIdx : 0;
-    }
-  }
+  // filterIndexes and currentLengthFilter are restored by syncDeckToApp()
+  // above — they live inside the deck object so no separate reload is needed.
 
   // Push the updated currentDeckId to Firestore NOW (after it's been set)
   if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
@@ -164,7 +158,7 @@ function switchDeck(id) {
 // ─── create / rename / delete ─────────────────────────────────
 function createDeck(name) {
   var id = 'deck_' + Date.now();
-  decks[id] = { name: name, sentences: [], srsData: {}, currentIdx: 0 };
+  decks[id] = { name: name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
   saveDeck(id);
   saveDeckList();
   return id;

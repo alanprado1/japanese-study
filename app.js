@@ -28,28 +28,30 @@ var currentLengthFilter = null;
 var filterIndexes = {};
 
 function saveFilterIndexes() {
-  try { localStorage.setItem('jpStudy_filterIndexes_' + currentDeckId, JSON.stringify(filterIndexes)); } catch(e) {}
+  // filterIndexes lives inside the deck object — persist by flushing to deck then saving.
+  var d = decks[currentDeckId];
+  if (d) d.filterIndexes = filterIndexes;
+  if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 }
 
 function loadFilterIndexes() {
-  try {
-    var raw = localStorage.getItem('jpStudy_filterIndexes_' + currentDeckId);
-    filterIndexes = raw ? JSON.parse(raw) : {};
-  } catch(e) { filterIndexes = {}; }
+  var d = decks[currentDeckId];
+  filterIndexes = (d && d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
 }
 
 // Persist and restore currentLengthFilter scoped to the current deck.
 // All code that was writing jpStudy_lengthFilter (global) now calls these
 // helpers so each deck remembers its own active filter independently.
 function saveCurrentLengthFilter() {
-  try { localStorage.setItem('jpStudy_lengthFilter_' + currentDeckId, currentLengthFilter || ''); } catch(e) {}
+  // lengthFilter lives inside the deck object.
+  var d = decks[currentDeckId];
+  if (d) d.lengthFilter = currentLengthFilter || '';
+  if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 }
 
 function loadCurrentLengthFilter() {
-  try {
-    var raw = localStorage.getItem('jpStudy_lengthFilter_' + currentDeckId);
-    currentLengthFilter = (raw !== null && raw !== '') ? raw : null;
-  } catch(e) { currentLengthFilter = null; }
+  var d = decks[currentDeckId];
+  currentLengthFilter = (d && d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
 }
 
 var LENGTH_LABELS = ['SHORT', 'MEDIUM', 'LONG', 'VERY LONG'];
@@ -669,14 +671,16 @@ function loadReviewState() {
 // ─── init ────────────────────────────────────────────────────
 initDecks();              // decks.js  — loads deck data into globals (sentences, srsData, currentIdx)
 loadUIPrefs();            // ui.js     — restores theme, font, toggles, and sets isListView
-loadFilterIndexes();      // app.js    — restores per-filter card positions for current deck
-loadCurrentLengthFilter();// app.js    — restores active filter for current deck (deck-scoped)
-// Apply the saved per-filter position now that we know both the filter and the indexes
+// filterIndexes and currentLengthFilter are restored by syncDeckToApp() inside initDecks().
+// They live in the deck object, so no separate load step is needed here.
+// Apply the per-filter card position (filterIndexes may point to a different card than currentIdx).
 (function() {
-  var _fi = filterIndexes[currentLengthFilter || ''];
-  if (_fi !== undefined) {
-    var _set = getSentencesForFilter();
-    currentIdx = (_fi < _set.length) ? _fi : Math.max(0, _set.length - 1);
+  if (currentLengthFilter) {
+    var _fi = filterIndexes[currentLengthFilter];
+    if (_fi !== undefined) {
+      var _set = getSentencesForFilter();
+      currentIdx = (_fi < _set.length) ? _fi : Math.max(0, _set.length - 1);
+    }
   }
 })();
 loadReviewState();        // app.js    — restores review mode session if one was in progress

@@ -34,25 +34,17 @@ function initFirebase() {
 
       if (user) {
         pullFromFirestore().then(function() {
+          // syncDeckToApp restores sentences, srsData, currentIdx, filterIndexes,
+          // and currentLengthFilter directly from the deck object — which now
+          // includes filter state. No separate reload step needed.
           syncDeckToApp();
-          // After a cloud pull currentDeckId may have changed (e.g. last session
-          // used a different deck on another device). Reload the INCOMING deck's
-          // filter state in the correct order:
-          //   1. Reset in-memory filterIndexes (no old-deck bleed)
-          //   2. Load per-deck filterIndexes for the now-active deck
-          //   3. Load the now-active deck's currentLengthFilter
-          //   4. Apply the correct per-filter card position
-          if (typeof filterIndexes !== 'undefined') filterIndexes = {};
-          if (typeof loadFilterIndexes       === 'function') loadFilterIndexes();
-          if (typeof loadCurrentLengthFilter === 'function') loadCurrentLengthFilter();
-          // Apply the per-filter position now that both indexes and filter are loaded
-          if (typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
-            var _fi   = filterIndexes[currentLengthFilter || ''];
+          // Apply the per-filter card position if a filter is active
+          if (typeof currentLengthFilter !== 'undefined' && currentLengthFilter &&
+              typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
+            var _fi   = filterIndexes[currentLengthFilter];
             var _filt = getSentencesForFilter();
             if (_fi !== undefined) {
               currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
-            } else {
-              currentIdx = (currentIdx < _filt.length) ? currentIdx : 0;
             }
           }
           render();
@@ -193,10 +185,12 @@ function pushDeckToFirestore(deckId) {
 
   // Write full deck data
   batch.set(deckRef, {
-    name:       d.name,
-    sentences:  d.sentences,
-    srsData:    d.srsData,
-    currentIdx: d.currentIdx
+    name:          d.name,
+    sentences:     d.sentences,
+    srsData:       d.srsData,
+    currentIdx:    d.currentIdx,
+    filterIndexes: d.filterIndexes || {},
+    lengthFilter:  d.lengthFilter  || ''
   });
 
   return batch.commit().catch(function(e) {
@@ -275,17 +269,19 @@ function pullFromFirestore() {
         if (!meta[id]) return;
         var d  = deckDoc.data();
         cloudDecks[id] = {
-          name:       d.name       || meta[id].name,
-          sentences:  d.sentences  || [],
-          srsData:    d.srsData    || {},
-          currentIdx: d.currentIdx || 0
+          name:          d.name          || meta[id].name,
+          sentences:     d.sentences     || [],
+          srsData:       d.srsData       || {},
+          currentIdx:    d.currentIdx    || 0,
+          filterIndexes: d.filterIndexes || {},
+          lengthFilter:  d.lengthFilter  || ''
         };
       });
 
       // Any decks in meta without a doc (empty decks)
       Object.keys(meta).forEach(function(id) {
         if (!cloudDecks[id]) {
-          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0 };
+          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
         }
       });
 
@@ -316,9 +312,8 @@ function pullFromFirestore() {
         decks[currentDeckId].currentIdx = _prePullIdx;
       }
 
-      // NOTE: currentLengthFilter is now restored by loadCurrentLengthFilter()
-      // (deck-scoped key jpStudy_lengthFilter_<deckId>) in the post-pull block
-      // above. The old global jpStudy_lengthFilter key is no longer used.
+      // currentLengthFilter and filterIndexes are stored inside each deck object,
+      // so they are automatically included in the localStorage write-back below.
 
       // Persist cloud data back to localStorage so next refresh starts fresh correctly
       var deckMeta = {};
@@ -326,10 +321,12 @@ function pullFromFirestore() {
         deckMeta[id] = { name: decks[id].name };
         try {
           localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({
-            name:       decks[id].name,
-            sentences:  decks[id].sentences,
-            srsData:    decks[id].srsData,
-            currentIdx: decks[id].currentIdx
+            name:          decks[id].name,
+            sentences:     decks[id].sentences,
+            srsData:       decks[id].srsData,
+            currentIdx:    decks[id].currentIdx,
+            filterIndexes: decks[id].filterIndexes || {},
+            lengthFilter:  decks[id].lengthFilter  || ''
           }));
         } catch(e) { console.warn('localStorage write failed for deck', id, e); }
       });
