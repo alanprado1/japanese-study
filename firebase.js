@@ -35,27 +35,24 @@ function initFirebase() {
       if (user) {
         pullFromFirestore().then(function() {
           syncDeckToApp();
+          // Always clamp currentIdx after loading
+          var _filt = getSentencesForFilter();
+          currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+          var key = currentLengthFilter || '';
+          if (filterIndexes[key] === undefined) {
+            filterIndexes[key] = currentIdx;
+            saveFilterIndexes();
+          }
           // Check if the loaded filter results in zero cards; reset to 'All' if so
-          if (currentLengthFilter) {
-            var _filt = getSentencesForFilter();
-            if (_filt.length === 0) {
-              currentLengthFilter = null;
-              saveCurrentLengthFilter();
-            }
+          if (currentLengthFilter && _filt.length === 0) {
+            currentLengthFilter = null;
+            saveCurrentLengthFilter();
+            _filt = getSentencesForFilter();
+            currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+            filterIndexes[''] = currentIdx;
+            saveFilterIndexes();
           }
-          // Apply the per-filter card position if a filter is active
-          if (typeof currentLengthFilter !== 'undefined' && currentLengthFilter &&
-              typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
-            var _fi   = filterIndexes[currentLengthFilter];
-            var _filt = getSentencesForFilter();
-            if (_fi !== undefined) {
-              currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
-            }
-          }
-          render();
-          updateDeckUI();
           // Reset review mode after sync to prevent inconsistencies or stuck states
-          // (review is local UI state and not synced via cloud)
           isReviewMode = false;
           reviewQueue = [];
           reviewIdx = 0;
@@ -64,7 +61,9 @@ function initFirebase() {
             localStorage.removeItem('jpStudy_reviewQueueIds');
             localStorage.removeItem('jpStudy_reviewIdx');
           } catch(e) {}
-          // Re-apply view state to ensure UI matches the reset mode
+          saveDeck(currentDeckId); // Persist any adjustments
+          render();
+          updateDeckUI();
           applyViewState();
         }).catch(function(e) {
           console.warn('Pull failed:', e);
@@ -283,9 +282,6 @@ function pullFromFirestore() {
 
       snapshot.forEach(function(deckDoc) {
         var id = deckDoc.id;
-        // ONLY include deck documents that are listed in deckList meta.
-        // Orphaned docs (e.g. deleted deck whose document hasn't been purged yet)
-        // must be ignored — deckList is the authoritative record of existing decks.
         if (!meta[id]) return;
         var d  = deckDoc.data();
         cloudDecks[id] = {
@@ -298,24 +294,15 @@ function pullFromFirestore() {
         };
       });
 
-      // Any decks in meta without a doc (empty decks)
       Object.keys(meta).forEach(function(id) {
         if (!cloudDecks[id]) {
           cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
         }
       });
 
-      // ── Preserve local currentIdx before overwriting with cloud ──
-      // currentIdx is "which card you're looking at" — pure UI state.
-      // Firestore stores the idx from the last push, which may lag behind
-      // the local value if the user navigated cards and refreshed before
-      // the async push completed. Without this guard the cloud's older
-      // idx value clobbers the local one, causing the stats bar to jump
-      // and a visible card-content flash on every page refresh.
       var _prePullDeckId = currentDeckId;
       var _prePullIdx    = decks[_prePullDeckId] ? decks[_prePullDeckId].currentIdx : 0;
 
-      // Fully replace local state with cloud state
       decks = cloudDecks;
 
       if (cloudCurrent && decks[cloudCurrent]) {
@@ -325,17 +312,18 @@ function pullFromFirestore() {
       }
       localStorage.setItem('jpStudy_currentDeck', currentDeckId);
 
-      // If the active deck hasn't changed, restore the local card position.
-      // If the active deck DID change (switched on another device) we use
-      // the cloud's idx so the user lands on the correct card for that deck.
       if (currentDeckId === _prePullDeckId && decks[currentDeckId]) {
         decks[currentDeckId].currentIdx = _prePullIdx;
       }
 
-      // currentLengthFilter and filterIndexes are stored inside each deck object,
-      // so they are automatically included in the localStorage write-back below.
+      // Check if cloud has content
+      var cloudHasContent = Object.values(decks).some(function(d) { return d.sentences && d.sentences.length > 0; });
 
-      // Persist cloud data back to localStorage so next refresh starts fresh correctly
+      if (!cloudHasContent) {
+        decks = localDecks;
+      }
+
+      // Persist the final decks state (cloud or restored local) to localStorage
       var deckMeta = {};
       Object.keys(decks).forEach(function(id) {
         deckMeta[id] = { name: decks[id].name };
@@ -354,17 +342,13 @@ function pullFromFirestore() {
         localStorage.setItem('jpStudy_deckList', JSON.stringify(deckMeta));
       } catch(e) {}
 
-      // Check if the pulled cloud data has any actual content (sentences)
-      var cloudHasContent = Object.values(decks).some(function(d) { return d.sentences && d.sentences.length > 0; });
-
       if (!cloudHasContent) {
-        // Cloud is effectively empty — restore local data and push it up
-        decks = localDecks;
         return pushAllDecksToFirestore();
       }
 
       return Promise.resolve();
     });
+
   }).catch(function(e) {
     console.warn('Firestore pull failed — keeping local data.', e);
   });

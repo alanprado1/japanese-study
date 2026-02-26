@@ -96,14 +96,17 @@ function syncDeckToApp() {
   if (!d) return;
   sentences      = d.sentences;
   srsData        = d.srsData;
-  currentIdx     = (d.currentIdx < d.sentences.length) ? d.currentIdx : 0;
-  // Restore per-deck filter state directly from the deck object.
-  // These are stored inside the deck so they travel with it through
-  // Firestore and localStorage with zero special handling.
-  if (typeof filterIndexes !== 'undefined')
-    filterIndexes = (d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
-  if (typeof currentLengthFilter !== 'undefined')
-    currentLengthFilter = (d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
+  currentIdx     = d.currentIdx || 0;
+  filterIndexes = (d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
+  currentLengthFilter = (d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
+  // Always clamp after loading
+  var _filt = getSentencesForFilter();
+  currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+  var key = currentLengthFilter || '';
+  if (filterIndexes[key] === undefined) {
+    filterIndexes[key] = currentIdx;
+    saveFilterIndexes();
+  }
 }
 
 function syncAppToDeck() {
@@ -128,19 +131,20 @@ function switchDeck(id) {
   localStorage.setItem('jpStudy_currentDeck', id);
   syncDeckToApp();
   // Check if the loaded filter results in zero cards; reset to 'All' if so
-  if (currentLengthFilter) {
-    var _filt = getSentencesForFilter();
-    if (_filt.length === 0) {
-      currentLengthFilter = null;
-      saveCurrentLengthFilter();
-    }
+  var _filt = getSentencesForFilter();
+  if (currentLengthFilter && _filt.length === 0) {
+    currentLengthFilter = null;
+    saveCurrentLengthFilter();
+    _filt = getSentencesForFilter();
+    currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+    filterIndexes[''] = currentIdx;
+    saveFilterIndexes();
   }
   // Apply the per-filter card position if a filter is active
-  if (currentLengthFilter && filterIndexes && typeof getSentencesForFilter === 'function') {
-    var _fi   = filterIndexes[currentLengthFilter];
-    var _filt = getSentencesForFilter();
+  if (currentLengthFilter) {
+    var _fi = filterIndexes[currentLengthFilter];
     if (_fi !== undefined) {
-      currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
+      currentIdx = Math.max(0, Math.min(_fi, _filt.length - 1));
     }
   }
   // Reset review mode on deck switch (review is per-deck implicitly)
@@ -153,6 +157,7 @@ function switchDeck(id) {
     localStorage.removeItem('jpStudy_reviewIdx');
   } catch(e) {}
   if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
+  saveDeck(currentDeckId); // Persist any adjustments
   resetAudioBtn();
   applyViewState();
   render();

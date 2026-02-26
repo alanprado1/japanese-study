@@ -114,74 +114,84 @@ document.getElementById('btnReviewMode').addEventListener('click', function() {
   if (currentLengthFilter) {
     due = due.filter(function(s) { return lengthLabel(s.jp.length) === currentLengthFilter; });
   }
-  if (!due.length) { alert('No cards due for review! Come back later.'); return; }
-  // Persist currentIdx before switching so returning to card mode shows correct card
-  if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
+  if (!due.length) { alert('No cards due for review.'); return; }
+  reviewQueue = due.sort(function(a, b) { return srsData[a.id].due - srsData[b.id].due; });
+  reviewIdx = 0;
   isReviewMode = true;
-  reviewQueue  = due;
-  reviewIdx    = 0;
-  isListView   = false;
+  isListView = false;
+  saveReviewState();
   try { localStorage.setItem('jpStudy_isListView', 'false'); } catch(e) {}
-  // Persist review session so a page refresh lands back in review mode
-  if (typeof saveReviewState === 'function') saveReviewState();
   collapseNavOnMobile();
   applyViewState();
+  renderReviewMode();
+});
+
+function exitReviewMode() {
+  isReviewMode = false;
+  try {
+    localStorage.setItem('jpStudy_isReviewMode', 'false');
+    localStorage.removeItem('jpStudy_reviewQueueIds');
+    localStorage.removeItem('jpStudy_reviewIdx');
+  } catch(e) {}
+  applyViewState();
   render();
-});
-
-// ─── settings panel ──────────────────────────────────────────
-var settingsBtn   = document.getElementById('btnSettings');
-var settingsPanel = document.getElementById('settingsPanel');
-
-settingsBtn.addEventListener('click', function(e) {
-  e.stopPropagation();
-  settingsPanel.classList.toggle('active');
-  settingsBtn.classList.toggle('active', settingsPanel.classList.contains('active'));
-});
-
-document.addEventListener('click', function(e) {
-  if (!settingsPanel.contains(e.target) && e.target !== settingsBtn) {
-    settingsPanel.classList.remove('active');
-    settingsBtn.classList.remove('active');
-  }
-});
-
-// ─── settings btn click: also collapse nav on mobile ─────────────────
-// Tapping the gear collapses the nav so the panel is visible on small screens.
-settingsBtn.addEventListener('click', function() {
-  collapseNavOnMobile();
-});
-
-// ─── font size slider ─────────────────────────────────────────
-document.getElementById('fontSizeSlider').addEventListener('input', function() {
-  var val = parseFloat(this.value).toFixed(1) + 'rem';
-  document.documentElement.style.setProperty('--jp-size', val);
-  document.getElementById('fontSizeVal').textContent = val;
-  try { localStorage.setItem('jpStudy_jpSize', val); } catch(e) {}
-});
-
-// ─── font weight ─────────────────────────────────────────────
-function setWeight(btn) {
-  document.querySelectorAll('.weight-btn').forEach(function(b) { b.classList.remove('active'); });
-  btn.classList.add('active');
-  var w = btn.dataset.w;
-  document.documentElement.style.setProperty('--jp-weight', w);
-  try { localStorage.setItem('jpStudy_jpWeight', w); } catch(e) {}
 }
 
-// ─── add sentences modal ──────────────────────────────────────
-function openAddModal()  { document.getElementById('addModal').classList.add('active'); }
-function closeAddModal() { document.getElementById('addModal').classList.remove('active'); }
+function renderReviewMode() {
+  var card = reviewQueue[reviewIdx];
+  if (!card) return exitReviewMode();
+  document.getElementById('statCard').textContent = (reviewIdx + 1) + ' / ' + reviewQueue.length;
+  document.getElementById('progressFill').style.width = ((reviewIdx + 1) / reviewQueue.length * 100) + '%';
+  document.getElementById('lengthFilterBar').style.display = 'none';
+  document.getElementById('reviewButtons').style.display = '';
+  document.getElementById('emptyMessage').style.display = 'none';
 
-document.getElementById('btnAddSentences').addEventListener('click', function() {
-  collapseNavOnMobile();
-  openAddModal();
-});
-document.getElementById('addModal').addEventListener('click', function(e) {
-  if (e.target === this) closeAddModal();
+  var jpEl = document.getElementById('cardJP');
+  jpEl.innerHTML = card.jp;
+  if (showFurigana) addFurigana(jpEl);
+
+  var enEl = document.getElementById('cardEN');
+  enEl.innerHTML = card.en;
+  enEl.style.display = showTranslation ? '' : 'none';
+
+  updateCardImage(card.jp);
+  prefetchJP(reviewQueue[reviewIdx + 1] ? reviewQueue[reviewIdx + 1].jp : null);
+}
+
+// ─── add modal ───────────────────────────────────────────────
+function openAddModal()  { document.getElementById('addModal').classList.add('active'); document.getElementById('sentenceInput').focus(); }
+function closeAddModal() { document.getElementById('addModal').classList.remove('active'); if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile(); }
+
+// ─── settings modal ──────────────────────────────────────────
+function openSettings()  { document.getElementById('settingsModal').classList.add('active'); }
+function closeSettings() { document.getElementById('settingsModal').classList.remove('active'); if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile(); }
+
+document.getElementById('btnSettings').addEventListener('click', openSettings);
+document.getElementById('settingsModal').addEventListener('click', function(e) { if (e.target === this) closeSettings(); });
+
+document.getElementById('fontSizeSlider').addEventListener('input', function() {
+  var size = this.value + 'rem';
+  document.documentElement.style.setProperty('--jp-size', size);
+  document.getElementById('fontSizeVal').textContent = size;
+  try { localStorage.setItem('jpStudy_jpSize', size); } catch(e) {}
 });
 
-// ─── deck modal ───────────────────────────────────────────────
+document.querySelectorAll('.weight-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var w = btn.dataset.w;
+    document.documentElement.style.setProperty('--jp-weight', w);
+    document.querySelectorAll('.weight-btn').forEach(function(b) { b.classList.toggle('active', b.dataset.w === w); });
+    try { localStorage.setItem('jpStudy_jpWeight', w); } catch(e) {}
+  });
+});
+
+document.querySelectorAll('.speaker-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    setSpeaker(btn.dataset.sid);
+  });
+});
+
+// ─── deck modal ──────────────────────────────────────────────
 document.getElementById('btnDeckSelect').addEventListener('click', function() {
   collapseNavOnMobile();
   openDeckModal();
