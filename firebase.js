@@ -34,10 +34,15 @@ function initFirebase() {
 
       if (user) {
         pullFromFirestore().then(function() {
-          // syncDeckToApp restores sentences, srsData, currentIdx, filterIndexes,
-          // and currentLengthFilter directly from the deck object — which now
-          // includes filter state. No separate reload step needed.
           syncDeckToApp();
+          // Check if the loaded filter results in zero cards; reset to 'All' if so
+          if (currentLengthFilter) {
+            var _filt = getSentencesForFilter();
+            if (_filt.length === 0) {
+              currentLengthFilter = null;
+              saveCurrentLengthFilter();
+            }
+          }
           // Apply the per-filter card position if a filter is active
           if (typeof currentLengthFilter !== 'undefined' && currentLengthFilter &&
               typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
@@ -47,8 +52,6 @@ function initFirebase() {
               currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
             }
           }
-          render();
-          updateDeckUI();
           // Reset review mode after sync to prevent inconsistencies or stuck states
           // (review is local UI state and not synced via cloud)
           isReviewMode = false;
@@ -59,7 +62,9 @@ function initFirebase() {
             localStorage.removeItem('jpStudy_reviewQueueIds');
             localStorage.removeItem('jpStudy_reviewIdx');
           } catch(e) {}
-          // Re-apply view state to ensure UI matches the reset mode
+          // Re-render and update UI
+          render();
+          updateDeckUI();
           applyViewState();
         }).catch(function(e) {
           console.warn('Pull failed:', e);

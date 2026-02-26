@@ -109,53 +109,58 @@ function syncDeckToApp() {
 function syncAppToDeck() {
   var d = decks[currentDeckId];
   if (!d) return;
-  d.sentences     = sentences;
-  d.srsData       = srsData;
-  d.currentIdx    = currentIdx;
-  if (typeof filterIndexes     !== 'undefined') d.filterIndexes = filterIndexes;
-  if (typeof currentLengthFilter !== 'undefined') d.lengthFilter = currentLengthFilter || '';
-}
-
-function saveCurrentDeck() {
-  syncAppToDeck();
-  saveDeck(currentDeckId);
+  d.sentences    = sentences;
+  d.srsData      = srsData;
+  d.currentIdx   = currentIdx;
+  d.filterIndexes = filterIndexes;
+  d.lengthFilter  = currentLengthFilter || '';
 }
 
 // ─── switch ──────────────────────────────────────────────────
 function switchDeck(id) {
-  if (!decks[id]) return;
-  if (id === currentDeckId) { closeDeckModal(); return; }
+  if (id === currentDeckId) return;
 
-  // ── 1. Persist the OUTGOING deck's state ────────────────────────────
-  // Save current card position and per-filter indexes under the old deckId
-  // BEFORE we change currentDeckId. saveFilterIndexes() uses currentDeckId
-  // as the storage key, so it must run while currentDeckId is still old.
+  // Save state of current deck first
   syncAppToDeck();
   saveDeck(currentDeckId);
-  if (typeof saveCurrentLengthFilter === 'function') saveCurrentLengthFilter();
-  if (typeof saveFilterIndexes       === 'function') saveFilterIndexes();
 
-  // ── 2. Switch ────────────────────────────────────────────────────────
   currentDeckId = id;
   localStorage.setItem('jpStudy_currentDeck', id);
-  syncDeckToApp(); // loads sentences/srsData/currentIdx for new deck
-
-  // filterIndexes and currentLengthFilter are restored by syncDeckToApp()
-  // above — they live inside the deck object so no separate reload is needed.
-
-  // Push the updated currentDeckId to Firestore NOW (after it's been set)
-  if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
-
+  syncDeckToApp();
+  // Check if the loaded filter results in zero cards; reset to 'All' if so
+  if (currentLengthFilter) {
+    var _filt = getSentencesForFilter();
+    if (_filt.length === 0) {
+      currentLengthFilter = null;
+      saveCurrentLengthFilter();
+    }
+  }
+  // Apply the per-filter card position if a filter is active
+  if (currentLengthFilter && filterIndexes && typeof getSentencesForFilter === 'function') {
+    var _fi   = filterIndexes[currentLengthFilter];
+    var _filt = getSentencesForFilter();
+    if (_fi !== undefined) {
+      currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
+    }
+  }
+  // Reset review mode on deck switch (review is per-deck implicitly)
   isReviewMode = false;
+  reviewQueue = [];
+  reviewIdx = 0;
+  try {
+    localStorage.setItem('jpStudy_isReviewMode', 'false');
+    localStorage.removeItem('jpStudy_reviewQueueIds');
+    localStorage.removeItem('jpStudy_reviewIdx');
+  } catch(e) {}
+  if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
   resetAudioBtn();
-
   applyViewState();
   render();
   updateDeckUI();
   closeDeckModal();
 }
 
-// ─── create / rename / delete ─────────────────────────────────
+// ─── create/rename/delete ────────────────────────────────────
 function createDeck(name) {
   var id = 'deck_' + Date.now();
   decks[id] = { name: name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
