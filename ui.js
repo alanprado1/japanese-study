@@ -211,15 +211,19 @@ document.getElementById('btnSettings').addEventListener('click', function(e) {
   }
 });
 
-// Close settings panel on mousedown outside — mousedown fires before click
-// so it never interferes with other buttons' own click handlers
+// Close settings panel when a mousedown occurs outside the panel's bounding
+// rectangle. Checking getBoundingClientRect instead of DOM containment means
+// the panel is dismissed even when it visually overlaps other page elements,
+// so those elements correctly receive the subsequent click event.
 document.addEventListener('mousedown', function(e) {
   var panel   = document.getElementById('settingsPanel');
   var btnGear = document.getElementById('btnSettings');
   if (!panel || !panel.classList.contains('active')) return;
-  if (!panel.contains(e.target) && !btnGear.contains(e.target)) {
-    closeSettings();
-  }
+  if (btnGear.contains(e.target)) return; // gear button handled by its own listener
+  var r = panel.getBoundingClientRect();
+  var insidePanel = (e.clientX >= r.left && e.clientX <= r.right &&
+                     e.clientY >= r.top  && e.clientY <= r.bottom);
+  if (!insidePanel) closeSettings();
 });
 
 document.getElementById('fontSizeSlider').addEventListener('input', function() {
