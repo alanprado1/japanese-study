@@ -197,6 +197,24 @@ document.getElementById('btnAddSentences').addEventListener('click', function() 
   openAddModal();
 });
 
+// ─── auth button ──────────────────────────────────────────────
+// Wire btnAuth via addEventListener so it works reliably regardless of when
+// Firebase's async onAuthStateChanged fires and sets btn.onclick.
+// currentUser is the global declared in firebase.js (null until signed in).
+document.getElementById('btnAuth').addEventListener('click', function() {
+  if (typeof currentUser !== 'undefined' && currentUser) {
+    // Signed in — sign out
+    if (typeof signOut === 'function') signOut();
+  } else {
+    // Signed out — sign in
+    if (typeof signInWithGoogle === 'function') {
+      signInWithGoogle();
+    } else {
+      alert('Firebase is not loaded. Please check your internet connection and refresh the page.');
+    }
+  }
+});
+
 // ─── settings panel ──────────────────────────────────────────
 function openSettings()  { document.getElementById('settingsPanel').classList.add('active'); }
 function closeSettings() { document.getElementById('settingsPanel').classList.remove('active'); }

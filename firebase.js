@@ -114,7 +114,11 @@ function _sessionStorageAvailable() {
 }
 
 function signInWithGoogle() {
-  if (!firebaseReady) return;
+  if (!firebaseReady) {
+    // Firebase SDK failed to load (CDN blocked, offline, etc.) — tell the user.
+    alert('Firebase is not ready. Please check your internet connection and refresh the page.');
+    return;
+  }
   var provider = new firebase.auth.GoogleAuthProvider();
 
   // On Safari, if sessionStorage is blocked, set persistence to NONE first.
@@ -125,9 +129,14 @@ function signInWithGoogle() {
 
   var doSignIn = function() {
     firebaseAuth.signInWithPopup(provider).catch(function(err) {
-      // User closed the popup before completing sign-in — not a real error, ignore silently.
+      // User closed the popup — not a real error, ignore silently.
       if (err.code === 'auth/popup-closed-by-user' ||
           err.code === 'auth/cancelled-popup-request') return;
+      // Popup was blocked by the browser — give actionable guidance.
+      if (err.code === 'auth/popup-blocked') {
+        alert('Sign-in popup was blocked by your browser.\nPlease allow popups for this site and try again.');
+        return;
+      }
       console.error('Sign in failed:', err);
       alert('Sign in failed: ' + err.message);
     });
@@ -156,16 +165,17 @@ function updateAuthUI() {
   var userInfo = document.getElementById('userInfo');
   if (!btn) return;
 
+  // Update button label — the actual click handler is a permanent addEventListener
+  // in ui.js that reads the global `currentUser` at click time, so we only need
+  // to update the visible text here.
   if (currentUser) {
     btn.textContent = 'Sign Out';
-    btn.onclick     = signOut;
     if (userInfo) {
       userInfo.textContent   = currentUser.displayName || currentUser.email;
       userInfo.style.display = '';
     }
   } else {
     btn.textContent = '☁ Sync';
-    btn.onclick     = signInWithGoogle;
     if (userInfo) userInfo.style.display = 'none';
   }
 }
