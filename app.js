@@ -28,10 +28,11 @@ var currentLengthFilter = null;
 var filterIndexes = {};
 
 function saveFilterIndexes() {
-  // filterIndexes lives inside the deck object — persist by flushing to deck then saving.
+  // Update the in-memory deck object only — no saveDeck() call here.
+  // The deck is persisted by saveCurrentDeck() which is always called
+  // shortly after (by prevCard, nextCard, toggleLengthPill, etc.).
   var d = decks[currentDeckId];
   if (d) d.filterIndexes = filterIndexes;
-  if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 }
 
 function loadFilterIndexes() {
@@ -43,10 +44,11 @@ function loadFilterIndexes() {
 // All code that was writing jpStudy_lengthFilter (global) now calls these
 // helpers so each deck remembers its own active filter independently.
 function saveCurrentLengthFilter() {
-  // lengthFilter lives inside the deck object.
+  // Update the in-memory deck object only — no saveDeck() call here.
+  // The deck is persisted by saveCurrentDeck() which is called by the
+  // callers that change the filter (toggleLengthPill, setLengthFilter).
   var d = decks[currentDeckId];
   if (d) d.lengthFilter = currentLengthFilter || '';
-  if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 }
 
 function loadCurrentLengthFilter() {
@@ -69,6 +71,7 @@ function setLengthFilter(label) {
   currentLengthFilter = (currentLengthFilter === key) ? null : key;
   saveCurrentLengthFilter();
   currentIdx = 0;
+  saveCurrentDeck();
   render();
 }
 
@@ -543,6 +546,7 @@ function toggleLengthPill(key) {
 
     currentLengthFilter = newFilter;
     saveCurrentLengthFilter();
+    saveCurrentDeck();
 
     // Rebuild review queue for the new filter
     var allDue = getDueCards();
@@ -581,6 +585,7 @@ function toggleLengthPill(key) {
     var savedIdx = filterIndexes[currentLengthFilter || ''] || 0;
     var newSet   = getSentencesForFilter();
     currentIdx   = (savedIdx < newSet.length) ? savedIdx : 0;
+    saveCurrentDeck();
   }
 
   render();
