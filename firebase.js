@@ -19,15 +19,6 @@ var currentUser   = null;
 var firebaseReady = false;
 
 // ─── init ────────────────────────────────────────────────────
-// Guard: prevents a second pull from running while one is already in flight.
-// On Safari with NONE persistence, onAuthStateChanged can fire twice in quick
-// succession (once on setPersistence resolve, once on signInWithPopup resolve).
-// Without this guard the second pull replaces `decks` mid-render, leaving
-// filterIndexes pointing at the old (now-orphaned) deck object and causing
-// the page to become unresponsive.
-var _pullInProgress = false;
-var _lastPullUid    = null;
-
 function initFirebase() {
   try {
     firebaseApp  = firebase.initializeApp(firebaseConfig);
@@ -42,12 +33,6 @@ function initFirebase() {
       updateAuthUI();
 
       if (user) {
-        // If a pull is already running for this user, skip — the in-flight
-        // pull will call render/updateDeckUI when it finishes.
-        if (_pullInProgress && _lastPullUid === user.uid) return;
-        _pullInProgress = true;
-        _lastPullUid    = user.uid;
-
         pullFromFirestore().then(function() {
           // syncDeckToApp restores sentences, srsData, currentIdx, filterIndexes,
           // and currentLengthFilter directly from the deck object — which now
@@ -64,15 +49,21 @@ function initFirebase() {
           }
           render();
           updateDeckUI();
+          // Reset review mode after sync to prevent inconsistencies or stuck states
+          // (review is local UI state and not synced via cloud)
+          isReviewMode = false;
+          reviewQueue = [];
+          reviewIdx = 0;
+          try {
+            localStorage.setItem('jpStudy_isReviewMode', 'false');
+            localStorage.removeItem('jpStudy_reviewQueueIds');
+            localStorage.removeItem('jpStudy_reviewIdx');
+          } catch(e) {}
+          // Re-apply view state to ensure UI matches the reset mode
+          applyViewState();
         }).catch(function(e) {
           console.warn('Pull failed:', e);
-        }).finally(function() {
-          _pullInProgress = false;
         });
-      } else {
-        // User signed out — reset guard so next sign-in pulls fresh
-        _pullInProgress = false;
-        _lastPullUid    = null;
       }
     });
 
@@ -143,7 +134,7 @@ function signInWithGoogle() {
       .then(doSignIn)
       .catch(function(err) {
         // Fallback: just try the popup anyway — best effort
-        console.warn('setPersistence failed, attempting popup anyway:', err);
+        console.warn('setPersistence failed, attempting sign-in anyway:', err);
         doSignIn();
       });
   } else {
