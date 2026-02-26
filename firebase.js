@@ -52,6 +52,8 @@ function initFirebase() {
               currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
             }
           }
+          render();
+          updateDeckUI();
           // Reset review mode after sync to prevent inconsistencies or stuck states
           // (review is local UI state and not synced via cloud)
           isReviewMode = false;
@@ -62,9 +64,7 @@ function initFirebase() {
             localStorage.removeItem('jpStudy_reviewQueueIds');
             localStorage.removeItem('jpStudy_reviewIdx');
           } catch(e) {}
-          // Re-render and update UI
-          render();
-          updateDeckUI();
+          // Re-apply view state to ensure UI matches the reset mode
           applyViewState();
         }).catch(function(e) {
           console.warn('Pull failed:', e);
@@ -265,6 +265,9 @@ function pullFromFirestore() {
   var ref = userDoc();
   if (!ref) return Promise.resolve();
 
+  // Backup local decks before potentially overwriting
+  var localDecks = JSON.parse(JSON.stringify(decks));
+
   return ref.get().then(function(doc) {
     // No data in cloud yet — first sign-in, push local data up
     if (!doc.exists || !doc.data().deckList || !Object.keys(doc.data().deckList).length) {
@@ -350,8 +353,18 @@ function pullFromFirestore() {
       try {
         localStorage.setItem('jpStudy_deckList', JSON.stringify(deckMeta));
       } catch(e) {}
-    });
 
+      // Check if the pulled cloud data has any actual content (sentences)
+      var cloudHasContent = Object.values(decks).some(function(d) { return d.sentences && d.sentences.length > 0; });
+
+      if (!cloudHasContent) {
+        // Cloud is effectively empty — restore local data and push it up
+        decks = localDecks;
+        return pushAllDecksToFirestore();
+      }
+
+      return Promise.resolve();
+    });
   }).catch(function(e) {
     console.warn('Firestore pull failed — keeping local data.', e);
   });
