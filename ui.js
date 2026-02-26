@@ -198,14 +198,11 @@ document.getElementById('btnAddSentences').addEventListener('click', function() 
 });
 
 // ─── settings panel ──────────────────────────────────────────
-// BUG FIX: was referencing 'settingsModal' which doesn't exist — correct ID is 'settingsPanel'
 function openSettings()  { document.getElementById('settingsPanel').classList.add('active'); }
-function closeSettings() {
-  document.getElementById('settingsPanel').classList.remove('active');
-  if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile();
-}
+function closeSettings() { document.getElementById('settingsPanel').classList.remove('active'); }
 
-document.getElementById('btnSettings').addEventListener('click', function() {
+document.getElementById('btnSettings').addEventListener('click', function(e) {
+  e.stopPropagation();
   var panel = document.getElementById('settingsPanel');
   if (panel.classList.contains('active')) {
     closeSettings();
@@ -214,12 +211,13 @@ document.getElementById('btnSettings').addEventListener('click', function() {
   }
 });
 
-// Close settings panel when clicking outside it
-document.addEventListener('click', function(e) {
+// Close settings panel on mousedown outside — mousedown fires before click
+// so it never interferes with other buttons' own click handlers
+document.addEventListener('mousedown', function(e) {
   var panel   = document.getElementById('settingsPanel');
   var btnGear = document.getElementById('btnSettings');
   if (!panel || !panel.classList.contains('active')) return;
-  if (!panel.contains(e.target) && e.target !== btnGear && !btnGear.contains(e.target)) {
+  if (!panel.contains(e.target) && !btnGear.contains(e.target)) {
     closeSettings();
   }
 });
