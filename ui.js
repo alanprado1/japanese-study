@@ -4,6 +4,7 @@
    ============================================================ */
 
 // ─── apply view state to DOM ──────────────────────────────────
+// Called on init and after deck switch so DOM always matches isListView
 function applyViewState() {
   var flashcard = document.getElementById('flashcardView');
   var listView  = document.getElementById('listView');
@@ -36,10 +37,7 @@ function setTheme(t) {
 }
 
 document.querySelectorAll('.theme-dot').forEach(function(dot) {
-  dot.addEventListener('click', function() {
-    setTheme(dot.dataset.t);
-    collapseNavOnMobile();
-  });
+  dot.addEventListener('click', function() { setTheme(dot.dataset.t); });
 });
 
 // ─── translation toggle ───────────────────────────────────────
@@ -49,7 +47,6 @@ document.getElementById('btnToggleTranslation').addEventListener('click', functi
   btn.classList.toggle('active', showTranslation);
   btn.textContent = showTranslation ? 'Translation ON' : 'Translation OFF';
   try { localStorage.setItem('jpStudy_translation', showTranslation); } catch(e) {}
-  collapseNavOnMobile();
   render();
 });
 
@@ -60,11 +57,10 @@ document.getElementById('btnToggleFurigana').addEventListener('click', function(
   btn.classList.toggle('active', showFurigana);
   btn.textContent = showFurigana ? '振仮名 ON' : '振仮名 OFF';
   try { localStorage.setItem('jpStudy_furigana', showFurigana); } catch(e) {}
-  collapseNavOnMobile();
   render();
 });
 
-// ─── helper: collapse nav on mobile ──────────────────────────
+// ─── helper: collapse nav on mobile when switching modes ─────
 function collapseNavOnMobile() {
   if (window.innerWidth <= 768) {
     document.querySelector('header').classList.add('header-hidden');
@@ -72,17 +68,22 @@ function collapseNavOnMobile() {
 }
 
 // ─── view toggle ─────────────────────────────────────────────
+// Standard mode toggles — no header side effects.
+// The header-hidden class is only ever controlled by the mobile nav pill.
+// Keeping these buttons clean/standard means future features can build
+// on them without undoing header-collapse state unexpectedly.
 document.getElementById('btnListView').addEventListener('click', function() {
   isListView   = true;
   isReviewMode = false;
+  // Persist currentIdx NOW before any async Firebase pull can clobber it
   if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
   try {
     localStorage.setItem('jpStudy_isListView', 'true');
+    // Clear review-mode persistence so a refresh doesn't restore review mode
     localStorage.setItem('jpStudy_isReviewMode', 'false');
     localStorage.removeItem('jpStudy_reviewQueueIds');
     localStorage.removeItem('jpStudy_reviewIdx');
   } catch(e) {}
-  collapseNavOnMobile();
   applyViewState();
   render();
 });
@@ -90,14 +91,15 @@ document.getElementById('btnListView').addEventListener('click', function() {
 document.getElementById('btnCardView').addEventListener('click', function() {
   isListView   = false;
   isReviewMode = false;
+  // Persist currentIdx NOW before any async Firebase pull can clobber it
   if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
   try {
     localStorage.setItem('jpStudy_isListView', 'false');
+    // Clear review-mode persistence so a refresh doesn't restore review mode
     localStorage.setItem('jpStudy_isReviewMode', 'false');
     localStorage.removeItem('jpStudy_reviewQueueIds');
     localStorage.removeItem('jpStudy_reviewIdx');
   } catch(e) {}
-  collapseNavOnMobile();
   applyViewState();
   render();
 });
@@ -105,172 +107,69 @@ document.getElementById('btnCardView').addEventListener('click', function() {
 // ─── review mode ─────────────────────────────────────────────
 document.getElementById('btnReviewMode').addEventListener('click', function() {
   var due = getDueCards();
+  // Apply active length filter so review queue matches the currently visible set
   if (currentLengthFilter) {
     due = due.filter(function(s) { return lengthLabel(s.jp.length) === currentLengthFilter; });
   }
-  if (!due.length) { alert('No cards due for review.'); return; }
-  reviewQueue  = due.sort(function(a, b) { return srsData[a.id].due - srsData[b.id].due; });
-  reviewIdx    = 0;
+  if (!due.length) { alert('No cards due for review! Come back later.'); return; }
+  // Persist currentIdx before switching so returning to card mode shows correct card
+  if (typeof saveCurrentDeck === 'function') saveCurrentDeck();
   isReviewMode = true;
+  reviewQueue  = due;
+  reviewIdx    = 0;
   isListView   = false;
-  saveReviewState();
   try { localStorage.setItem('jpStudy_isListView', 'false'); } catch(e) {}
-  collapseNavOnMobile();
-  applyViewState();
-  renderReviewMode();
-});
-
-function exitReviewMode() {
-  isReviewMode = false;
-  try {
-    localStorage.setItem('jpStudy_isReviewMode', 'false');
-    localStorage.removeItem('jpStudy_reviewQueueIds');
-    localStorage.removeItem('jpStudy_reviewIdx');
-  } catch(e) {}
+  // Persist review session so a page refresh lands back in review mode
+  if (typeof saveReviewState === 'function') saveReviewState();
   applyViewState();
   render();
-}
-
-// ─── renderReviewMode ─────────────────────────────────────────
-// BUG FIX: corrected all wrong DOM IDs:
-//   cardJP        → jpText
-//   cardEN        → transText
-//   reviewButtons → reviewBtns
-//   emptyMessage  → emptyState (hidden via _showCardArea)
-function renderReviewMode() {
-  var card = reviewQueue[reviewIdx];
-  if (!card) return exitReviewMode();
-
-  // Ensure card area is visible, empty state hidden
-  var cardArea   = document.getElementById('cardArea');
-  var emptyState = document.getElementById('emptyState');
-  if (cardArea)   cardArea.style.display   = '';
-  if (emptyState) emptyState.style.display = 'none';
-
-  var statsBar = document.getElementById('statsBar');
-  if (statsBar) statsBar.style.display = 'flex';
-
-  document.getElementById('statCard').textContent     = (reviewIdx + 1) + ' / ' + reviewQueue.length;
-  document.getElementById('progressFill').style.width = ((reviewIdx + 1) / reviewQueue.length * 100) + '%';
-  document.getElementById('lengthFilterBar').style.display = 'none';
-
-  // BUG FIX: correct ID is 'reviewBtns', not 'reviewButtons'
-  var reviewBtns = document.getElementById('reviewBtns');
-  if (reviewBtns) reviewBtns.style.display = '';
-
-  // Hide the prev/next nav in review mode
-  var cardNav = document.getElementById('cardNav');
-  if (cardNav) cardNav.style.display = 'none';
-
-  // BUG FIX: correct ID is 'jpText', not 'cardJP'
-  var jpEl = document.getElementById('jpText');
-  if (jpEl) {
-    jpEl.innerHTML = card.jp;
-    if (showFurigana) addFurigana(jpEl);
-  }
-
-  // BUG FIX: correct ID is 'transText', not 'cardEN'
-  var enEl = document.getElementById('transText');
-  if (enEl) {
-    enEl.innerHTML     = card.en;
-    enEl.style.display = showTranslation ? '' : 'none';
-  }
-
-  updateCardImage(card.jp);
-  prefetchJP(reviewQueue[reviewIdx + 1] ? reviewQueue[reviewIdx + 1].jp : null);
-  updateDueBadge();
-}
-
-// ─── add modal ───────────────────────────────────────────────
-function openAddModal()  {
-  document.getElementById('addModal').classList.add('active');
-  document.getElementById('sentenceInput').focus();
-}
-function closeAddModal() {
-  document.getElementById('addModal').classList.remove('active');
-  if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile();
-}
-
-// BUG FIX: btnAddSentences had no event listener attached
-document.getElementById('btnAddSentences').addEventListener('click', function() {
-  collapseNavOnMobile();
-  openAddModal();
-});
-
-// ─── auth button ──────────────────────────────────────────────
-// Wire btnAuth via addEventListener so it works reliably regardless of when
-// Firebase's async onAuthStateChanged fires and sets btn.onclick.
-// currentUser is the global declared in firebase.js (null until signed in).
-document.getElementById('btnAuth').addEventListener('click', function() {
-  if (typeof currentUser !== 'undefined' && currentUser) {
-    // Signed in — sign out
-    if (typeof signOut === 'function') signOut();
-  } else {
-    // Signed out — sign in
-    if (typeof signInWithGoogle === 'function') {
-      signInWithGoogle();
-    } else {
-      alert('Firebase is not loaded. Please check your internet connection and refresh the page.');
-    }
-  }
 });
 
 // ─── settings panel ──────────────────────────────────────────
-function openSettings()  { document.getElementById('settingsPanel').classList.add('active'); }
-function closeSettings() { document.getElementById('settingsPanel').classList.remove('active'); }
+var settingsBtn   = document.getElementById('btnSettings');
+var settingsPanel = document.getElementById('settingsPanel');
 
-document.getElementById('btnSettings').addEventListener('click', function(e) {
+settingsBtn.addEventListener('click', function(e) {
   e.stopPropagation();
-  var panel = document.getElementById('settingsPanel');
-  if (panel.classList.contains('active')) {
-    closeSettings();
-  } else {
-    openSettings();
+  settingsPanel.classList.toggle('active');
+  settingsBtn.classList.toggle('active', settingsPanel.classList.contains('active'));
+});
+
+document.addEventListener('click', function(e) {
+  if (!settingsPanel.contains(e.target) && e.target !== settingsBtn) {
+    settingsPanel.classList.remove('active');
+    settingsBtn.classList.remove('active');
   }
 });
 
-// Close settings panel when a mousedown occurs outside the panel's bounding
-// rectangle. Checking getBoundingClientRect instead of DOM containment means
-// the panel is dismissed even when it visually overlaps other page elements,
-// so those elements correctly receive the subsequent click event.
-document.addEventListener('mousedown', function(e) {
-  var panel   = document.getElementById('settingsPanel');
-  var btnGear = document.getElementById('btnSettings');
-  if (!panel || !panel.classList.contains('active')) return;
-  if (btnGear.contains(e.target)) return; // gear button handled by its own listener
-  var r = panel.getBoundingClientRect();
-  var insidePanel = (e.clientX >= r.left && e.clientX <= r.right &&
-                     e.clientY >= r.top  && e.clientY <= r.bottom);
-  if (!insidePanel) closeSettings();
-});
-
+// ─── font size slider ─────────────────────────────────────────
 document.getElementById('fontSizeSlider').addEventListener('input', function() {
-  var size = this.value + 'rem';
-  document.documentElement.style.setProperty('--jp-size', size);
-  document.getElementById('fontSizeVal').textContent = size;
-  try { localStorage.setItem('jpStudy_jpSize', size); } catch(e) {}
+  var val = parseFloat(this.value).toFixed(1) + 'rem';
+  document.documentElement.style.setProperty('--jp-size', val);
+  document.getElementById('fontSizeVal').textContent = val;
+  try { localStorage.setItem('jpStudy_jpSize', val); } catch(e) {}
 });
 
-document.querySelectorAll('.weight-btn').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var w = btn.dataset.w;
-    document.documentElement.style.setProperty('--jp-weight', w);
-    document.querySelectorAll('.weight-btn').forEach(function(b) { b.classList.toggle('active', b.dataset.w === w); });
-    try { localStorage.setItem('jpStudy_jpWeight', w); } catch(e) {}
-  });
+// ─── font weight ─────────────────────────────────────────────
+function setWeight(btn) {
+  document.querySelectorAll('.weight-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  var w = btn.dataset.w;
+  document.documentElement.style.setProperty('--jp-weight', w);
+  try { localStorage.setItem('jpStudy_jpWeight', w); } catch(e) {}
+}
+
+// ─── add sentences modal ──────────────────────────────────────
+function openAddModal()  { document.getElementById('addModal').classList.add('active'); }
+function closeAddModal() { document.getElementById('addModal').classList.remove('active'); }
+
+document.getElementById('btnAddSentences').addEventListener('click', openAddModal);
+document.getElementById('addModal').addEventListener('click', function(e) {
+  if (e.target === this) closeAddModal();
 });
 
-document.querySelectorAll('.speaker-btn').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    setSpeaker(btn.dataset.sid);
-  });
-});
-
-// ─── deck modal ──────────────────────────────────────────────
-document.getElementById('btnDeckSelect').addEventListener('click', function() {
-  collapseNavOnMobile();
-  openDeckModal();
-});
+// ─── deck modal ───────────────────────────────────────────────
+document.getElementById('btnDeckSelect').addEventListener('click', openDeckModal);
 document.getElementById('deckModal').addEventListener('click', function(e) {
   if (e.target === this) closeDeckModal();
 });
@@ -279,21 +178,25 @@ document.getElementById('btnNewDeck').addEventListener('click', function() {
   var name = prompt('New deck name:');
   if (!name || !name.trim()) return;
 
+  // Save state of current deck first
   syncAppToDeck();
   saveDeck(currentDeckId);
 
+  // Create deck in memory + localStorage only (no Firestore yet)
   var id = 'deck_' + Date.now();
-  decks[id] = { name: name.trim(), sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
+  decks[id] = { name: name.trim(), sentences: [], srsData: {}, currentIdx: 0 };
   try {
-    localStorage.setItem('jpStudy_deck_' + id, JSON.stringify(decks[id]));
+    localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({ name: name.trim(), sentences: [], srsData: {}, currentIdx: 0 }));
   } catch(e) {}
 
   closeDeckModal();
 
+  // Switch to new deck — set currentDeckId BEFORE any Firestore push
   currentDeckId = id;
   localStorage.setItem('jpStudy_currentDeck', id);
   syncDeckToApp();
 
+  // Now push to Firestore with the correct currentDeckId already set
   if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
   if (typeof saveDeck === 'function') saveDeck(currentDeckId);
 
@@ -321,17 +224,15 @@ document.getElementById('btnDeleteMode').addEventListener('click', function() {
   btn.classList.toggle('active', isDeleteMode);
   btn.classList.toggle('btn-danger', isDeleteMode);
   btn.textContent = isDeleteMode ? '✕ Del ON' : '✕ Del';
-  collapseNavOnMobile();
   render();
 });
-
 document.addEventListener('keydown', function(e) {
   if (document.getElementById('addModal').classList.contains('active'))  return;
   if (document.getElementById('deckModal').classList.contains('active')) return;
   if (e.key === 'ArrowRight' || e.key === 'l') nextCard();
   if (e.key === 'ArrowLeft'  || e.key === 'h') prevCard();
   if (e.key === 't') document.getElementById('btnToggleTranslation').click();
-  if (e.key === 'Escape') { closePopup(); closeAddModal(); closeDeckModal(); closeSettings(); }
+  if (e.key === 'Escape') { closePopup(); closeAddModal(); closeDeckModal(); }
 });
 
 // ─── load all saved UI preferences ───────────────────────────
@@ -370,11 +271,17 @@ function loadUIPrefs() {
     });
   }
 
+  // Restore list vs card view — set isListView so applyViewState works correctly
   var lv = localStorage.getItem('jpStudy_isListView');
   if (lv === 'true') isListView = true;
+
+  // Restore length filter
+  var lf = localStorage.getItem('jpStudy_lengthFilter');
+  if (lf !== null && lf !== '') currentLengthFilter = lf;
 }
 
 // ─── mobile: nav toggle pill ─────────────────────────────────
+// Header starts visible. Only the pill button toggles it.
 document.getElementById('btnMobileNav').addEventListener('click', function() {
   var headerEl = document.querySelector('header');
   headerEl.classList.toggle('header-hidden');

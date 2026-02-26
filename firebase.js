@@ -35,36 +35,8 @@ function initFirebase() {
       if (user) {
         pullFromFirestore().then(function() {
           syncDeckToApp();
-          // Always clamp currentIdx after loading
-          var _filt = getSentencesForFilter();
-          currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-          var key = currentLengthFilter || '';
-          if (filterIndexes[key] === undefined) {
-            filterIndexes[key] = currentIdx;
-            saveFilterIndexes();
-          }
-          // Check if the loaded filter results in zero cards; reset to 'All' if so
-          if (currentLengthFilter && _filt.length === 0) {
-            currentLengthFilter = null;
-            saveCurrentLengthFilter();
-            _filt = getSentencesForFilter();
-            currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-            filterIndexes[''] = currentIdx;
-            saveFilterIndexes();
-          }
-          // Reset review mode after sync to prevent inconsistencies or stuck states
-          isReviewMode = false;
-          reviewQueue = [];
-          reviewIdx = 0;
-          try {
-            localStorage.setItem('jpStudy_isReviewMode', 'false');
-            localStorage.removeItem('jpStudy_reviewQueueIds');
-            localStorage.removeItem('jpStudy_reviewIdx');
-          } catch(e) {}
-          saveDeck(currentDeckId); // Persist any adjustments
           render();
           updateDeckUI();
-          applyViewState();
         }).catch(function(e) {
           console.warn('Pull failed:', e);
         });
@@ -78,81 +50,16 @@ function initFirebase() {
 }
 
 // ─── auth ────────────────────────────────────────────────────
-// Safari's Intelligent Tracking Prevention (ITP) partitions or blocks
-// sessionStorage in certain contexts (pages opened from other apps, Home Screen
-// PWAs, or when "Prevent Cross-Site Tracking" restricts storage). Firebase's
-// signInWithPopup probes sessionStorage before opening the popup; if the probe
-// throws a SecurityError, Firebase throws auth/operation-not-supported-in-this-environment
-// before the popup ever opens.
-//
-// Fix: detect Safari, probe sessionStorage safely, and if it's blocked switch
-// persistence to NONE (in-memory) before calling signInWithPopup. NONE bypasses
-// the storage probe entirely, so the popup opens normally. The trade-off is that
-// on affected Safari sessions the auth state won't survive a page refresh — but
-// that's fine because onAuthStateChanged + Firestore sync restores data immediately
-// on every sign-in anyway.
-//
-// Chrome and all other browsers are unaffected and continue to use LOCAL persistence.
-
-function _isSafari() {
-  var ua = navigator.userAgent;
-  // Safari reports "Safari" but NOT "Chrome" or "CriOS" or "FxiOS"
-  return /Safari/i.test(ua) && !/Chrome/i.test(ua) && !/CriOS/i.test(ua) && !/FxiOS/i.test(ua);
-}
-
-function _sessionStorageAvailable() {
-  // Probe sessionStorage safely — Safari ITP throws SecurityError on access
-  // in partitioned contexts; localStorage may also throw in private browsing.
-  try {
-    var key = '__fbTest__';
-    sessionStorage.setItem(key, '1');
-    sessionStorage.removeItem(key);
-    return true;
-  } catch(e) {
-    return false;
-  }
-}
-
 function signInWithGoogle() {
-  if (!firebaseReady) {
-    // Firebase SDK failed to load (CDN blocked, offline, etc.) — tell the user.
-    alert('Firebase is not ready. Please check your internet connection and refresh the page.');
-    return;
-  }
+  if (!firebaseReady) return;
   var provider = new firebase.auth.GoogleAuthProvider();
-
-  // On Safari, if sessionStorage is blocked, set persistence to NONE first.
-  // NONE uses pure in-memory storage and bypasses Firebase's storage probe,
-  // allowing signInWithPopup to succeed. On all other browsers (or on Safari
-  // when storage is accessible) use the default LOCAL persistence.
-  var needsNonePersistence = _isSafari() && !_sessionStorageAvailable();
-
-  var doSignIn = function() {
-    firebaseAuth.signInWithPopup(provider).catch(function(err) {
-      // User closed the popup — not a real error, ignore silently.
-      if (err.code === 'auth/popup-closed-by-user' ||
-          err.code === 'auth/cancelled-popup-request') return;
-      // Popup was blocked by the browser — give actionable guidance.
-      if (err.code === 'auth/popup-blocked') {
-        alert('Sign-in popup was blocked by your browser.\nPlease allow popups for this site and try again.');
-        return;
-      }
-      console.error('Sign in failed:', err);
-      alert('Sign in failed: ' + err.message);
-    });
-  };
-
-  if (needsNonePersistence) {
-    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.NONE)
-      .then(doSignIn)
-      .catch(function(err) {
-        // Fallback: just try the popup anyway — best effort
-        console.warn('setPersistence failed, attempting sign-in anyway:', err);
-        doSignIn();
-      });
-  } else {
-    doSignIn();
-  }
+  firebaseAuth.signInWithPopup(provider).catch(function(err) {
+    // User closed the popup before completing sign-in — not a real error, ignore silently.
+    if (err.code === 'auth/popup-closed-by-user' ||
+        err.code === 'auth/cancelled-popup-request') return;
+    console.error('Sign in failed:', err);
+    alert('Sign in failed: ' + err.message);
+  });
 }
 
 function signOut() {
@@ -165,17 +72,16 @@ function updateAuthUI() {
   var userInfo = document.getElementById('userInfo');
   if (!btn) return;
 
-  // Update button label — the actual click handler is a permanent addEventListener
-  // in ui.js that reads the global `currentUser` at click time, so we only need
-  // to update the visible text here.
   if (currentUser) {
     btn.textContent = 'Sign Out';
+    btn.onclick     = signOut;
     if (userInfo) {
       userInfo.textContent   = currentUser.displayName || currentUser.email;
       userInfo.style.display = '';
     }
   } else {
     btn.textContent = '☁ Sync';
+    btn.onclick     = signInWithGoogle;
     if (userInfo) userInfo.style.display = 'none';
   }
 }
@@ -211,12 +117,10 @@ function pushDeckToFirestore(deckId) {
 
   // Write full deck data
   batch.set(deckRef, {
-    name:          d.name,
-    sentences:     d.sentences,
-    srsData:       d.srsData,
-    currentIdx:    d.currentIdx,
-    filterIndexes: d.filterIndexes || {},
-    lengthFilter:  d.lengthFilter  || ''
+    name:       d.name,
+    sentences:  d.sentences,
+    srsData:    d.srsData,
+    currentIdx: d.currentIdx
   });
 
   return batch.commit().catch(function(e) {
@@ -274,9 +178,6 @@ function pullFromFirestore() {
   var ref = userDoc();
   if (!ref) return Promise.resolve();
 
-  // Backup local decks before potentially overwriting
-  var localDecks = JSON.parse(JSON.stringify(decks));
-
   return ref.get().then(function(doc) {
     // No data in cloud yet — first sign-in, push local data up
     if (!doc.exists || !doc.data().deckList || !Object.keys(doc.data().deckList).length) {
@@ -292,27 +193,37 @@ function pullFromFirestore() {
 
       snapshot.forEach(function(deckDoc) {
         var id = deckDoc.id;
+        // ONLY include deck documents that are listed in deckList meta.
+        // Orphaned docs (e.g. deleted deck whose document hasn't been purged yet)
+        // must be ignored — deckList is the authoritative record of existing decks.
         if (!meta[id]) return;
         var d  = deckDoc.data();
         cloudDecks[id] = {
-          name:          d.name          || meta[id].name,
-          sentences:     d.sentences     || [],
-          srsData:       d.srsData       || {},
-          currentIdx:    d.currentIdx    || 0,
-          filterIndexes: d.filterIndexes || {},
-          lengthFilter:  d.lengthFilter  || ''
+          name:       d.name       || meta[id].name,
+          sentences:  d.sentences  || [],
+          srsData:    d.srsData    || {},
+          currentIdx: d.currentIdx || 0
         };
       });
 
+      // Any decks in meta without a doc (empty decks)
       Object.keys(meta).forEach(function(id) {
         if (!cloudDecks[id]) {
-          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
+          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0 };
         }
       });
 
+      // ── Preserve local currentIdx before overwriting with cloud ──
+      // currentIdx is "which card you're looking at" — pure UI state.
+      // Firestore stores the idx from the last push, which may lag behind
+      // the local value if the user navigated cards and refreshed before
+      // the async push completed. Without this guard the cloud's older
+      // idx value clobbers the local one, causing the stats bar to jump
+      // and a visible card-content flash on every page refresh.
       var _prePullDeckId = currentDeckId;
       var _prePullIdx    = decks[_prePullDeckId] ? decks[_prePullDeckId].currentIdx : 0;
 
+      // Fully replace local state with cloud state
       decks = cloudDecks;
 
       if (cloudCurrent && decks[cloudCurrent]) {
@@ -322,41 +233,36 @@ function pullFromFirestore() {
       }
       localStorage.setItem('jpStudy_currentDeck', currentDeckId);
 
+      // If the active deck hasn't changed, restore the local card position.
+      // If the active deck DID change (switched on another device) we use
+      // the cloud's idx so the user lands on the correct card for that deck.
       if (currentDeckId === _prePullDeckId && decks[currentDeckId]) {
         decks[currentDeckId].currentIdx = _prePullIdx;
       }
 
-      // Check if cloud has content
-      var cloudHasContent = Object.values(decks).some(function(d) { return d.sentences && d.sentences.length > 0; });
+      // Restore length filter — pullFromFirestore wipes state then calls render(),
+      // so we must re-apply the saved filter here or it resets to null every refresh
+      try {
+        var savedFilter = localStorage.getItem('jpStudy_lengthFilter');
+        currentLengthFilter = (savedFilter && savedFilter !== '') ? savedFilter : null;
+      } catch(e) {}
 
-      if (!cloudHasContent) {
-        decks = localDecks;
-      }
-
-      // Persist the final decks state (cloud or restored local) to localStorage
+      // Persist cloud data back to localStorage so next refresh starts fresh correctly
       var deckMeta = {};
       Object.keys(decks).forEach(function(id) {
         deckMeta[id] = { name: decks[id].name };
         try {
           localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({
-            name:          decks[id].name,
-            sentences:     decks[id].sentences,
-            srsData:       decks[id].srsData,
-            currentIdx:    decks[id].currentIdx,
-            filterIndexes: decks[id].filterIndexes || {},
-            lengthFilter:  decks[id].lengthFilter  || ''
+            name:       decks[id].name,
+            sentences:  decks[id].sentences,
+            srsData:    decks[id].srsData,
+            currentIdx: decks[id].currentIdx
           }));
         } catch(e) { console.warn('localStorage write failed for deck', id, e); }
       });
       try {
         localStorage.setItem('jpStudy_deckList', JSON.stringify(deckMeta));
       } catch(e) {}
-
-      if (!cloudHasContent) {
-        return pushAllDecksToFirestore();
-      }
-
-      return Promise.resolve();
     });
 
   }).catch(function(e) {

@@ -23,81 +23,19 @@ var currentLengthFilter = null;
 
 // Remembers the card index for each filter value so switching filters
 // restores position. Keys: null→'', 'SHORT', 'MEDIUM', 'LONG', 'VERY LONG'.
+// Also stores review-mode positions under 'review:SHORT' etc.
 // Persisted to localStorage so it survives refresh, sign-out, and Firebase pulls.
 var filterIndexes = {};
 
 function saveFilterIndexes() {
-  var d = decks[currentDeckId];
-  if (d) d.filterIndexes = filterIndexes;
+  try { localStorage.setItem('jpStudy_filterIndexes', JSON.stringify(filterIndexes)); } catch(e) {}
 }
 
 function loadFilterIndexes() {
-  var d = decks[currentDeckId];
-  filterIndexes = (d && d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
-}
-
-function saveCurrentLengthFilter() {
-  var d = decks[currentDeckId];
-  if (d) d.lengthFilter = currentLengthFilter || '';
-}
-
-function loadCurrentLengthFilter() {
-  var d = decks[currentDeckId];
-  currentLengthFilter = (d && d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
-}
-
-// ─── saveCurrentDeck ─────────────────────────────────────────
-// BUG FIX: was called throughout the codebase but never defined.
-function saveCurrentDeck() {
-  syncAppToDeck();
-  saveDeck(currentDeckId);
-}
-
-// ─── lengthLabel ─────────────────────────────────────────────
-// BUG FIX: was called by getSentencesForFilter() but never defined.
-function lengthLabel(len) {
-  if (len <= 10) return 'SHORT';
-  if (len <= 20) return 'MEDIUM';
-  if (len <= 35) return 'LONG';
-  return 'VERY LONG';
-}
-
-// ─── toggleLengthPill ────────────────────────────────────────
-// BUG FIX: called from HTML onclick but never defined.
-// Clicking the active filter (or "All") resets to showing all cards.
-function toggleLengthPill(label) {
-  if (label === null || label === currentLengthFilter) {
-    if (currentLengthFilter === null) return; // already showing All
-    currentLengthFilter = null;
-    saveCurrentLengthFilter();
-    var filtKey  = '';
-    var savedIdx = filterIndexes[filtKey];
-    currentIdx   = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
-    var _filt    = getSentencesForFilter();
-    currentIdx   = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-    filterIndexes[filtKey] = currentIdx;
-    saveFilterIndexes();
-    saveCurrentDeck();
-    render();
-  } else {
-    setLengthFilter(label);
-  }
-}
-
-// ─── updateLengthFilterBar ───────────────────────────────────
-// BUG FIX: called by render() but never defined.
-// Syncs pill active-state highlight to currentLengthFilter.
-function updateLengthFilterBar() {
-  var bar = document.getElementById('lengthFilterBar');
-  if (!bar) return;
-  bar.querySelectorAll('.length-filter-pill').forEach(function(pill) {
-    var onclick = pill.getAttribute('onclick') || '';
-    var match   = onclick.match(/toggleLengthPill\(([^)]*)\)/);
-    if (!match) return;
-    var arg        = match[1].trim();
-    var pillFilter = (arg === 'null') ? null : arg.replace(/['"]/g, '');
-    pill.classList.toggle('active', pillFilter === currentLengthFilter);
-  });
+  try {
+    var raw = localStorage.getItem('jpStudy_filterIndexes');
+    if (raw) filterIndexes = JSON.parse(raw);
+  } catch(e) { filterIndexes = {}; }
 }
 
 var LENGTH_LABELS = ['SHORT', 'MEDIUM', 'LONG', 'VERY LONG'];
@@ -110,41 +48,19 @@ function getSentencesForFilter() {
 }
 
 function setLengthFilter(label) {
-  var key;
-  if (!label || label === 'ALL') {
-    key = null;
-  } else if (label === 'VERY LONG' || label === 'VERY') {
-    key = 'VERY LONG';
-  } else {
-    key = label.split(' ')[0]; // 'SHORT', 'MEDIUM', 'LONG'
-  }
-
-  currentLengthFilter = key;
-  saveCurrentLengthFilter();
-
-  var filtKey  = currentLengthFilter || '';
-  var savedIdx = filterIndexes[filtKey];
-  currentIdx   = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
-
-  var _filt = getSentencesForFilter();
-  // If filter yields no cards, auto-reset to All
-  if (key && _filt.length === 0) {
-    currentLengthFilter = null;
-    saveCurrentLengthFilter();
-    _filt    = sentences;
-    filtKey  = '';
-    savedIdx = filterIndexes[''];
-    currentIdx = (savedIdx !== undefined && savedIdx >= 0) ? savedIdx : 0;
-  }
-  currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-  filterIndexes[filtKey] = currentIdx;
-  saveFilterIndexes();
-  saveCurrentDeck();
+  var key = label.split(' ')[0];
+  if (key === 'VERY') key = 'VERY LONG';
+  currentLengthFilter = (currentLengthFilter === key) ? null : key;
+  try { localStorage.setItem('jpStudy_lengthFilter', currentLengthFilter || ''); } catch(e) {}
+  currentIdx = 0;
   render();
 }
 
 // ─── SRS ─────────────────────────────────────────────────────
 function getDueCards() {
+  // Only cards that have been rated at least once (srsData entry exists)
+  // AND whose next-due time has passed. Unseen cards are excluded from
+  // review — the user must encounter them in card mode first.
   var now = Date.now();
   return sentences.filter(function(s) {
     var d = srsData[s.id];
@@ -156,10 +72,11 @@ function getDueCards() {
 function deleteSentence(id) {
   sentences = sentences.filter(function(s) { return s.id !== id; });
   delete srsData[id];
-  var _filt = getSentencesForFilter();
-  currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
+  // Clamp index
+  if (currentIdx >= sentences.length) currentIdx = Math.max(0, sentences.length - 1);
+  // Also remove from review queue if present
   reviewQueue = reviewQueue.filter(function(s) { return s.id !== id; });
-  reviewIdx   = Math.max(0, Math.min(reviewIdx, reviewQueue.length - 1));
+  if (reviewIdx >= reviewQueue.length) reviewIdx = Math.max(0, reviewQueue.length - 1);
   saveCurrentDeck();
   render();
 }
@@ -167,7 +84,6 @@ function deleteSentence(id) {
 function updateDueBadge() {
   var due   = getDueCards().length;
   var badge = document.getElementById('dueBadge');
-  if (!badge) return;
   badge.style.display = due > 0 ? '' : 'none';
   badge.textContent   = due;
 }
@@ -177,147 +93,508 @@ function reviewCard(rating) {
   if (!card) return;
 
   var now  = Date.now();
-  var prev = srsData[card.id] || { interval: 0, due: 0 };
-  var mult = { again: 0.5, hard: 1.2, good: 2.0, easy: 3.0 }[rating];
-  var interval = Math.max(INTERVALS[rating], prev.interval * mult);
-  srsData[card.id] = { interval: interval, due: now + interval * 60000 };
+  var prev = srsData[card.id] || { interval: 0, ease: 2.5, reps: 0 };
+
+  var interval = INTERVALS[rating];
+  if (prev.reps > 0 && rating !== 'again') {
+    interval = Math.round(prev.interval * prev.ease * (rating === 'hard' ? 0.8 : rating === 'easy' ? 1.3 : 1));
+    interval = Math.max(interval, INTERVALS[rating]);
+  }
+
+  var ease = prev.ease + (rating === 'easy' ? 0.15 : rating === 'hard' ? -0.15 : rating === 'again' ? -0.2 : 0);
+  if (ease < 1.3) ease = 1.3;
+
+  srsData[card.id] = { interval: interval, due: now + interval * 60000, ease: ease, reps: prev.reps + 1, lastRating: rating };
+  saveCurrentDeck();
 
   if (isReviewMode) {
-    reviewQueue.splice(reviewIdx, 1);
-    saveReviewState();
-    if (reviewQueue.length === 0) {
-      exitReviewMode();
-    } else {
-      reviewIdx = Math.min(reviewIdx, reviewQueue.length - 1);
-      renderReviewMode();
+    reviewIdx++;
+    if (reviewIdx >= reviewQueue.length) {
+      isReviewMode = false;
+      // Clear persisted review state — session is complete
+      try {
+        localStorage.setItem('jpStudy_isReviewMode', 'false');
+        localStorage.removeItem('jpStudy_reviewQueueIds');
+        localStorage.removeItem('jpStudy_reviewIdx');
+      } catch(e) {}
+      alert('Review complete! Reviewed ' + reviewQueue.length + ' cards.');
+      render();
+      return;
     }
+    // Save updated reviewIdx so refresh restores the correct position
+    try { localStorage.setItem('jpStudy_reviewIdx', reviewIdx); } catch(e) {}
+    // Only re-render the card content — don't rebuild list view
+    renderCard();
   } else {
-    saveCurrentDeck();
-    render();
+    nextCard();
   }
-  updateDueBadge();
 }
 
-// ─── empty / card area helpers ────────────────────────────────
-function _showCardArea(visible) {
-  var cardArea   = document.getElementById('cardArea');
-  var emptyState = document.getElementById('emptyState');
-  if (cardArea)   cardArea.style.display   = visible ? ''     : 'none';
-  if (emptyState) emptyState.style.display = visible ? 'none' : '';
+// ─── furigana via kuromoji (self-hosted dict) ─────────────────
+// kuromoji@0.1.2 browser build + dict files hosted in /dict/ folder.
+// This is the ONLY approach that reliably works in plain HTML on GitHub Pages.
+// Dict files must be present at ./dict/ — see README for setup instructions.
+//
+// How it works:
+//  1. kuromoji.js is loaded as a <script> tag (exposes window.kuromoji)
+//  2. On page load, kuromoji reads the dict files from ./dict/
+//  3. Once ready (~1-2s), all sentences are pre-tokenized and cached in localStorage
+//  4. Furigana is synchronous after that — instant on every render
+
+var kuromojiTokenizer = null;
+var kuromojiReady     = false;
+
+// localStorage cache: full Japanese sentence → ruby HTML string
+// Key: full Japanese sentence → ruby HTML string
+// Each sentence processed once, then instant forever.
+var furiganaCache = {};
+
+function loadFuriganaCache() {
+  try {
+    var raw = localStorage.getItem('jpStudy_furigana_cache');
+    if (raw) furiganaCache = JSON.parse(raw);
+  } catch(e) { furiganaCache = {}; }
 }
 
-// ─── card render ─────────────────────────────────────────────
-// BUG FIX: all DOM IDs corrected:
-//   cardJP       → jpText
-//   cardEN       → transText
-//   reviewButtons→ reviewBtns
-//   emptyMessage → emptyState (handled via _showCardArea)
+function saveFuriganaCache() {
+  try { localStorage.setItem('jpStudy_furigana_cache', JSON.stringify(furiganaCache)); } catch(e) {}
+}
+
+// Debounced save — coalesces rapid successive calls into one write.
+// When switching to list view with 100+ sentences, buildJPHTML is called
+// for every sentence. Without debouncing this causes 100+ synchronous
+// localStorage.setItem calls, each serialising the whole cache = O(n²) freeze.
+var _saveFuriganaTimer = null;
+function saveFuriganaCacheDebounced() {
+  if (_saveFuriganaTimer) clearTimeout(_saveFuriganaTimer);
+  _saveFuriganaTimer = setTimeout(saveFuriganaCache, 800);
+}
+
+function katakanaToHiragana(str) {
+  return str.replace(/[\u30a1-\u30f6]/g, function(m) { return String.fromCharCode(m.charCodeAt(0) - 0x60); });
+}
+
+function hasKanji(str) {
+  return /[\u4e00-\u9faf\u3400-\u4dbf]/.test(str);
+}
+
+function initKuromoji() {
+  if (!window.kuromoji) return;
+  kuromoji.builder({ dicPath: './dict' }).build(function(err, tokenizer) {
+    if (err) { console.error('Kuromoji failed:', err); return; }
+    kuromojiTokenizer = tokenizer;
+    kuromojiReady = true;
+    // Pre-tokenize all sentences in background (both furigana ON and OFF variants)
+    sentences.forEach(function(s) {
+      var savedShow = showFurigana;
+      showFurigana = false; buildJPHTML(s.jp);
+      showFurigana = true;  buildJPHTML(s.jp);
+      showFurigana = savedShow;
+    });
+    if (showFurigana) render();
+  });
+}
+
+// ── addFurigana: ruby ONLY above kanji, never above hiragana ──
+//
+// Key insight from kuromoji's actual tokenization:
+//   "食べる" → token { surface_form: "食べ", reading: "タベ" }
+//              (kuromoji splits the trailing inflection "る" into a
+//               separate token, so surface already ends in hiragana okurigana)
+//   "高い"   → token { surface_form: "高い", reading: "タカイ" }
+//   "お金"   → token { surface_form: "お金", reading: "オカネ" }
+//   "飲み物" → token { surface_form: "飲み物", reading: "ノミモノ" }
+//              (middle hiragana — handled by fallback below)
+//
+// Algorithm:
+//   1. No kanji → return surface as-is (pure kana tokens never get ruby)
+//   2. Strip matching trailing hiragana chars from both surface and reading
+//   3. Strip matching leading hiragana chars from both surface and reading
+//   4. Wrap what remains: <ruby>kanjiPart<rt>readingPart</rt></ruby>
+//   5. Fallback if stripping left nothing to annotate (middle-hiragana words
+//      like 飲み物): wrap the whole surface — still better than nothing,
+//      and these are genuinely uncommon in study sentences.
+
+function addFurigana(token) {
+  var surface = token.surface_form;
+  var reading = token.reading;
+
+  // Guard: no kanji, or no reading, or reading is identical to surface → plain text
+  if (!hasKanji(surface) || !reading) return surface;
+  var hira = katakanaToHiragana(reading);
+  if (hira === surface) return surface;
+
+  var surf = surface.split('');
+  var read = hira.split('');
+
+  // ── Strip matching trailing hiragana (okurigana suffix) ──
+  // Only strip hiragana [\u3041-\u3096], NOT katakana or kanji
+  var suffix = '';
+  while (
+    surf.length > 0 &&
+    read.length > 0 &&
+    /^[\u3041-\u3096]$/.test(surf[surf.length - 1]) &&
+    surf[surf.length - 1] === read[read.length - 1]
+  ) {
+    suffix = surf.pop() + suffix;
+    read.pop();
+  }
+
+  // ── Strip matching leading hiragana (okurigana prefix, e.g. お金) ──
+  var prefix = '';
+  while (
+    surf.length > 0 &&
+    read.length > 0 &&
+    /^[\u3041-\u3096]$/.test(surf[0]) &&
+    surf[0] === read[0]
+  ) {
+    prefix += surf.shift();
+    read.shift();
+  }
+
+  var kanjiPart   = surf.join('');
+  var readingPart = read.join('');
+
+  // Fallback: if stripping left an empty kanji or reading part, wrap whole surface.
+  // This handles middle-hiragana compounds (飲み物 etc.) — not perfect but safe.
+  if (!kanjiPart || !readingPart) {
+    return '<ruby>' + surface + '<rt>' + hira + '</rt></ruby>';
+  }
+
+  return prefix + '<ruby>' + kanjiPart + '<rt>' + readingPart + '</rt></ruby>' + suffix;
+}
+
+// ── buildJPHTML ───────────────────────────────────────────────
+// Builds clickable-span HTML for a Japanese sentence.
+// Cache key includes a version stamp so stale cached HTML from old
+// buggy versions is automatically discarded on first load.
+var FURIGANA_CACHE_VERSION = 'v3';
+
+function buildJPHTML(text) {
+  if (!kuromojiReady) return text;
+
+  var cacheKey = FURIGANA_CACHE_VERSION + ':' + (showFurigana ? 'f:' : 'n:') + text;
+  if (furiganaCache[cacheKey]) return furiganaCache[cacheKey];
+
+  var tokens = kuromojiTokenizer.tokenize(text);
+  var html = '';
+
+  for (var i = 0; i < tokens.length; i++) {
+    var token   = tokens[i];
+    var surface = token.surface_form;
+    var inner   = showFurigana ? addFurigana(token) : surface;
+
+    // Wrap Japanese tokens in clickable spans; leave punctuation (記号) as plain text
+    if (token.pos !== '記号') {
+      html += '<span class="jp-word" data-word="' +
+        surface.replace(/"/g, '&quot;') +
+        '" data-reading="' + (token.reading || '') +
+        '" onclick="lookupWord(this)">' + inner + '</span>';
+    } else {
+      html += inner;
+    }
+  }
+
+  furiganaCache[cacheKey] = html;
+  saveFuriganaCacheDebounced();
+  return html;
+}
+
+// ─── word lookup popup ───────────────────────────────────────
+function lookupWord(el) {
+  document.querySelectorAll('.jp-word.selected').forEach(function(e) { e.classList.remove('selected'); });
+  el.classList.add('selected');
+  var word    = el.dataset.word;
+  var reading = el.dataset.reading
+    ? katakanaToHiragana(el.dataset.reading)
+    : (kuromojiReady
+        ? katakanaToHiragana(kuromojiTokenizer.tokenize(word).map(function(t) { return t.reading || t.surface_form; }).join(''))
+        : '—');
+
+  document.getElementById('popupWord').textContent    = word;
+  document.getElementById('popupReading').textContent = reading || '—';
+  document.getElementById('popupMeaning').textContent = 'Open jisho.org for full meaning →';
+
+  var examples = sentences.filter(function(s) { return s.jp.indexOf(word) !== -1; }).slice(0, 3);
+  document.getElementById('popupExamples').innerHTML = examples.length
+    ? examples.map(function(ex) {
+        var safeJP = ex.jp.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return '<div class="popup-example">' +
+          '<div class="popup-example-jp">' + ex.jp + '</div>' +
+          '<div class="popup-example-en">' + ex.en + '</div>' +
+          '<button class="popup-audio-btn" onclick="speakJP(\'' + safeJP + '\').catch(function(){})">&#9654; Audio</button>' +
+          '</div>';
+      }).join('')
+    : '<div style="color:var(--text3);font-size:0.8rem;font-family:\'DM Mono\',monospace">No examples in your collection yet.</div>';
+
+  document.getElementById('wordPopup').classList.add('active');
+}
+
+// ─── helpers ─────────────────────────────────────────────────
+function lengthLabel(len) {
+  if (len <= 8)  return 'SHORT';
+  if (len <= 16) return 'MEDIUM';
+  if (len <= 24) return 'LONG';
+  return 'VERY LONG';
+}
+
+// ─── render: flashcard ───────────────────────────────────────
+// Tracks the last sentence id rendered so we only re-trigger the card
+// animation on real navigation, not on data-sync re-renders (e.g. the
+// Firebase pull that fires ~500ms after page load). Prevents the flash.
+var _lastRenderedSentenceId = null;
+
 function renderCard() {
   var filtered = getSentencesForFilter();
-  currentIdx   = Math.max(0, Math.min(currentIdx, filtered.length - 1));
-  var card     = filtered[currentIdx];
-
-  if (!card) {
-    _showCardArea(false);
-    var statsBar = document.getElementById('statsBar');
-    if (statsBar) statsBar.style.display = 'none';
-    document.getElementById('statCard').textContent     = '0 / 0';
-    document.getElementById('progressFill').style.width = '0%';
-    document.getElementById('lengthFilterBar').style.display = 'none';
+  if (!filtered.length) {
+    document.getElementById('emptyState').style.display = '';
+    document.getElementById('cardArea').style.display   = 'none';
+    document.getElementById('statsBar').style.display   = 'none';
     return;
   }
 
-  _showCardArea(true);
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('cardArea').style.display   = '';
+  document.getElementById('statsBar').style.display   = 'flex';
 
-  var statsBar = document.getElementById('statsBar');
-  if (statsBar) statsBar.style.display = 'flex';
+  var src = isReviewMode ? reviewQueue : getSentencesForFilter();
+  var idx = isReviewMode ? reviewIdx  : currentIdx;
 
-  document.getElementById('statCard').textContent     = (currentIdx + 1) + ' / ' + filtered.length;
-  document.getElementById('progressFill').style.width = ((currentIdx + 1) / filtered.length * 100) + '%';
-
-  document.getElementById('lengthFilterBar').style.display = sentences.length > 1 ? 'flex' : 'none';
-
-  var reviewBtns = document.getElementById('reviewBtns');
-  if (reviewBtns) reviewBtns.style.display = isReviewMode ? '' : 'none';
-
-  var cardNav = document.getElementById('cardNav');
-  if (cardNav) cardNav.style.display = isReviewMode ? 'none' : '';
-
-  // BUG FIX: correct ID is 'jpText'
-  var jpEl = document.getElementById('jpText');
-  if (jpEl) {
-    jpEl.innerHTML = card.jp;
-    if (showFurigana) addFurigana(jpEl);
+  // Clamp idx to the current filtered set's bounds.
+  // currentIdx is stored relative to the filtered list. On refresh, if
+  // the filter is still active but the set is now smaller (or the deck
+  // changed), idx can exceed src.length — src[idx] is undefined and
+  // renderCard would silently return, leaving jpText blank even though
+  // cardArea is already visible.
+  if (idx >= src.length) {
+    idx = Math.max(0, src.length - 1);
+    if (!isReviewMode) currentIdx = idx;
   }
 
-  // BUG FIX: correct ID is 'transText'
-  var enEl = document.getElementById('transText');
-  if (enEl) {
-    enEl.innerHTML     = card.en;
-    enEl.style.display = showTranslation ? '' : 'none';
+  var s = src[idx];
+  if (!s) return;
+
+  // Only re-trigger the slide-in animation when the displayed sentence
+  // actually changes. Doing it unconditionally caused a visible flash
+  // on every data-sync re-render (same card, same content, but the
+  // forced reflow + animation restart produced a noticeable jump).
+  var card = document.getElementById('mainCard');
+  if (s.id !== _lastRenderedSentenceId) {
+    _lastRenderedSentenceId = s.id;
+    card.style.animation = 'none';
+    card.offsetHeight; // reflow
+    card.style.animation = '';
   }
 
-  updateCardImage(card.jp);
-  prefetchJP(filtered[currentIdx + 1] ? filtered[currentIdx + 1].jp : null);
+  // ── Mark card as seen on first view ─────────────────────────────────
+  // Creates a srsData entry with due = now so the card immediately appears
+  // in review mode. Runs only once per card (guard: !srsData[s.id]).
+  // Does NOT run in review mode — rating buttons handle that path.
+  if (!isReviewMode && !srsData[s.id]) {
+    srsData[s.id] = { interval: 0, due: Date.now(), ease: 2.5, reps: 0, lastRating: null };
+    saveCurrentDeck();
+  }
+
+  document.getElementById('jpText').innerHTML      = buildJPHTML(s.jp);
+
+  // Delete button on card
+  var existingDelBtn = document.getElementById('cardDeleteBtn');
+  if (existingDelBtn) existingDelBtn.remove();
+  if (isDeleteMode) {
+    var delBtn = document.createElement('button');
+    delBtn.id        = 'cardDeleteBtn';
+    delBtn.className = 'card-delete-btn';
+    delBtn.innerHTML = '✕';
+    delBtn.title     = 'Delete this sentence';
+    delBtn.onclick   = function() {
+      if (confirm('Delete this sentence?')) deleteSentence(s.id);
+    };
+    document.getElementById('mainCard').appendChild(delBtn);
+  }
+
+  var transEl = document.getElementById('transText');
+  transEl.textContent = s.en;
+  transEl.classList.toggle('hidden', !showTranslation);
+
+  document.getElementById('reviewBtns').style.display = isReviewMode ? 'flex' : 'none';
+  document.getElementById('cardNav').style.display    = isReviewMode ? 'none' : 'flex';
+
+  document.getElementById('statCard').textContent      = (idx + 1) + ' / ' + src.length;
+  document.getElementById('progressFill').style.width  = src.length ? ((idx + 1) / src.length * 100) + '%' : '0%';
+
+  updateDueBadge();
+
+  // Prefetch next card's audio
+  if (typeof prefetchJP === 'function') {
+    var nextSrc  = src[isReviewMode ? reviewIdx + 1 : currentIdx + 1];
+    if (nextSrc) prefetchJP(nextSrc.jp);
+  }
 }
 
-// ─── list render ─────────────────────────────────────────────
-// BUG FIX: was targeting 'sentenceList' which doesn't exist — correct element is 'listView'
-// Also: list now respects currentLengthFilter so filtering works in list mode too
 function renderListView() {
-  var list = document.getElementById('listView');
-  if (!list) return;
-  list.innerHTML = '';
+  var container = document.getElementById('listView');
 
-  var displaySentences = currentLengthFilter ? getSentencesForFilter() : sentences;
+  if (!sentences.length) {
+    container.innerHTML = '<div class="empty-state"><div class="kanji">\u7121</div>' +
+      '<p>No sentences yet. Add some to begin.</p>' +
+      '<button class="btn btn-accent" onclick="openAddModal()">+ Add Sentences</button></div>';
+    return;
+  }
 
-  displaySentences.forEach(function(s) {
-    var item       = document.createElement('div');
-    item.className = 'list-item' + (isDeleteMode ? ' delete-mode' : '');
+  var groups = {
+    'SHORT (\u22648)':    [],
+    'MEDIUM (9\u201316)': [],
+    'LONG (17\u201324)':  [],
+    'VERY LONG (25+)':    []
+  };
+  var sentencesToGroup = getSentencesForFilter();
+  sentencesToGroup.forEach(function(s) {
+    var l = s.jp.length;
+    if      (l <= 8)  groups['SHORT (\u22648)'].push(s);
+    else if (l <= 16) groups['MEDIUM (9\u201316)'].push(s);
+    else if (l <= 24) groups['LONG (17\u201324)'].push(s);
+    else              groups['VERY LONG (25+)'].push(s);
+  });
 
-    var jp       = document.createElement('div');
-    jp.className = 'jp-text';
-    jp.innerHTML = s.jp;
-    if (showFurigana) addFurigana(jp);
+  var frag = document.createDocumentFragment();
 
-    var en           = document.createElement('div');
-    en.className     = 'en-text';
-    en.innerHTML     = s.en;
-    en.style.display = showTranslation ? '' : 'none';
+  Object.keys(groups).forEach(function(label) {
+    var items = groups[label];
+    if (!items.length) return;
 
-    var audioBtn       = document.createElement('button');
-    audioBtn.className = 'card-audio-btn list-audio-btn';
-    audioBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>';
-    (function(sentence, btn) {
-      btn.onclick = function(e) { e.stopPropagation(); speakListItem(btn, sentence.jp); };
-    })(s, audioBtn);
+    var groupEl = document.createElement('div');
+    groupEl.className = 'length-group';
 
-    item.appendChild(jp);
-    item.appendChild(en);
-    item.appendChild(audioBtn);
+    var titleEl = document.createElement('div');
+    var filterKey = label.split(' ')[0] === 'VERY' ? 'VERY LONG' : label.split(' ')[0];
+    var isActive  = (currentLengthFilter === filterKey);
+    titleEl.className = 'length-group-title' + (isActive ? ' filter-active' : '');
+    titleEl.title = isActive ? 'Click to show all lengths' : 'Click to filter to ' + filterKey + ' only';
+    titleEl.innerHTML = label + ' \u00b7 ' + items.length + ' sentences' +
+      ' <span class="filter-badge">' + (isActive ? '\u2715 clear filter' : '\u25bc filter') + '</span>';
+    titleEl.style.cursor = 'pointer';
+    titleEl.addEventListener('click', function() { setLengthFilter(label); });
+    groupEl.appendChild(titleEl);
 
-    if (isDeleteMode) {
-      var delBtn         = document.createElement('button');
-      delBtn.className   = 'delete-btn';
-      delBtn.textContent = '✕';
-      (function(id) { delBtn.onclick = function() { deleteSentence(id); }; })(s.id);
-      item.appendChild(delBtn);
+    items.forEach(function(s, i) {
+      var srs = srsData[s.id];
+      var statusClass = srs
+        ? (srs.lastRating === 'again' ? 'again' : srs.lastRating === 'hard' ? 'hard' : 'good')
+        : '';
+
+      var item = document.createElement('div');
+      item.className = 'list-item';
+      item.addEventListener('click', function() { openListCard(item); });
+
+      var safeJP = s.jp.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+      item.innerHTML =
+        '<div class="list-item-num">' + (i + 1) + '</div>' +
+        '<div class="list-item-content">' +
+          '<div class="list-item-jp">' + buildJPHTML(s.jp) + '</div>' +
+          '<div class="list-item-en' + (showTranslation ? '' : ' hidden') + '">' + s.en + '</div>' +
+        '</div>' +
+        '<div class="list-item-status">' +
+          '<div class="status-dot ' + statusClass + '"></div>' +
+          '<button class="popup-audio-btn" onclick="event.stopPropagation();speakListItem(this,\'' + safeJP + '\')">'+ICON_PLAY+'</button>' +
+          (isDeleteMode ? '<button class="list-delete-btn" onclick="event.stopPropagation();(confirm(\'Delete this sentence?\')&&deleteSentence(\'' + s.id + '\'))" title="Delete">\u2715</button>' : '') +
+        '</div>';
+
+      groupEl.appendChild(item);
+    });
+
+    frag.appendChild(groupEl);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(frag);
+}
+
+function openListCard(el) {
+  document.querySelectorAll('.list-item').forEach(function(e) { e.classList.remove('reviewing'); });
+  el.classList.add('reviewing');
+}
+
+// ─── length filter pills (card/review/list mode) ────────────
+function toggleLengthPill(key) {
+  var prevFilter = currentLengthFilter;
+  var newFilter  = (currentLengthFilter === key) ? null : key;
+
+  if (isReviewMode) {
+    // Save current review position for the old filter before switching
+    filterIndexes['review:' + (prevFilter || '')] = reviewIdx;
+    saveFilterIndexes();
+
+    currentLengthFilter = newFilter;
+    try { localStorage.setItem('jpStudy_lengthFilter', currentLengthFilter || ''); } catch(e) {}
+
+    // Rebuild review queue for the new filter
+    var allDue = getDueCards();
+    reviewQueue = currentLengthFilter
+      ? allDue.filter(function(s) { return lengthLabel(s.jp.length) === currentLengthFilter; })
+      : allDue;
+
+    // Restore saved position for the new filter, clamped to new queue length
+    var savedReviewIdx = filterIndexes['review:' + (currentLengthFilter || '')] || 0;
+    reviewIdx = (savedReviewIdx < reviewQueue.length) ? savedReviewIdx : 0;
+
+    if (!reviewQueue.length) {
+      // No due cards match — gracefully exit review mode
+      isReviewMode = false;
+      currentIdx   = 0;
+      try {
+        localStorage.setItem('jpStudy_isReviewMode', 'false');
+        localStorage.removeItem('jpStudy_reviewQueueIds');
+        localStorage.removeItem('jpStudy_reviewIdx');
+      } catch(e) {}
+    } else {
+      try {
+        localStorage.setItem('jpStudy_reviewQueueIds', JSON.stringify(reviewQueue.map(function(s) { return s.id; })));
+        localStorage.setItem('jpStudy_reviewIdx', String(reviewIdx));
+      } catch(e) {}
     }
+  } else {
+    // Save current card position for the old filter before switching
+    filterIndexes[prevFilter || ''] = currentIdx;
+    saveFilterIndexes();
 
-    list.appendChild(item);
+    currentLengthFilter = newFilter;
+    try { localStorage.setItem('jpStudy_lengthFilter', currentLengthFilter || ''); } catch(e) {}
+
+    // Restore saved position for the new filter, clamped to new set length
+    var savedIdx = filterIndexes[currentLengthFilter || ''] || 0;
+    var newSet   = getSentencesForFilter();
+    currentIdx   = (savedIdx < newSet.length) ? savedIdx : 0;
+  }
+
+  render();
+}
+
+function updateLengthFilterBar() {
+  var bar = document.getElementById('lengthFilterBar');
+  if (!bar) return;
+  // Show in ALL modes — card, review, and list
+  var show = sentences.length > 0;
+  bar.style.display = show ? 'flex' : 'none';
+  if (!show) return;
+  // Set active state on each pill — handle "All" pill separately
+  bar.querySelectorAll('.length-filter-pill').forEach(function(pill) {
+    var onclick   = pill.getAttribute('onclick') || '';
+    var isAllPill = onclick.indexOf('null') !== -1;
+    if (isAllPill) {
+      pill.classList.toggle('active', currentLengthFilter === null);
+    } else {
+      var match   = onclick.match(/toggleLengthPill\('([^']+)'\)/);
+      var pillKey = match ? match[1] : null;
+      pill.classList.toggle('active', pillKey !== null && pillKey === currentLengthFilter);
+    }
   });
 }
 
 // ─── main render ─────────────────────────────────────────────
-// BUG FIX: was never dispatching to renderReviewMode() when isReviewMode=true
 function render() {
-  if (isListView) {
-    renderListView();
-  } else if (isReviewMode) {
-    renderReviewMode();
-  } else {
-    renderCard();
-  }
+  if (isListView) renderListView();
+  else            renderCard();
   updateDueBadge();
   updateLengthFilterBar();
 }
@@ -325,33 +602,30 @@ function render() {
 // ─── navigation ──────────────────────────────────────────────
 function prevCard() {
   if (isReviewMode) return;
-  var _filt = getSentencesForFilter();
   if (currentIdx > 0) {
     currentIdx--;
-    var key = currentLengthFilter || '';
-    filterIndexes[key] = currentIdx;
+    filterIndexes[currentLengthFilter || ''] = currentIdx;
     saveFilterIndexes();
-    resetAudioBtn();
-    saveCurrentDeck();
-    render();
+    resetAudioBtn(); saveCurrentDeck(); renderCard();
   }
 }
 
 function nextCard() {
   if (isReviewMode) return;
-  var _filt = getSentencesForFilter();
-  if (currentIdx < _filt.length - 1) {
+  var filtered = getSentencesForFilter();
+  if (currentIdx < filtered.length - 1) {
     currentIdx++;
-    var key = currentLengthFilter || '';
-    filterIndexes[key] = currentIdx;
+    filterIndexes[currentLengthFilter || ''] = currentIdx;
     saveFilterIndexes();
-    resetAudioBtn();
-    saveCurrentDeck();
-    render();
+    resetAudioBtn(); saveCurrentDeck(); renderCard();
   }
 }
 
 // ─── review mode persistence ─────────────────────────────────
+// Saves isReviewMode + queue IDs + position to localStorage so a page
+// refresh mid-review restores the exact session, not card mode.
+// Queue is stored as an array of sentence IDs and reconstructed from
+// the live sentences array so stale IDs (deleted cards) are filtered out.
 function saveReviewState() {
   try {
     localStorage.setItem('jpStudy_isReviewMode', 'true');
@@ -368,8 +642,8 @@ function loadReviewState() {
     var ids     = JSON.parse(raw);
     var sentMap = {};
     sentences.forEach(function(s) { sentMap[s.id] = s; });
-    var queue = ids.map(function(id) { return sentMap[id]; }).filter(Boolean);
-    if (!queue.length) return;
+    var queue   = ids.map(function(id) { return sentMap[id]; }).filter(Boolean);
+    if (!queue.length) return; // all cards were deleted — don't restore
     var idx = parseInt(localStorage.getItem('jpStudy_reviewIdx') || '0', 10);
     if (idx >= queue.length) idx = 0;
     isReviewMode = true;
@@ -379,34 +653,23 @@ function loadReviewState() {
 }
 
 // ─── init ────────────────────────────────────────────────────
-initDecks();      // decks.js  — loads deck data into globals
-loadUIPrefs();    // ui.js     — restores theme, font, toggles, sets isListView
-
-// Apply per-filter card position on startup
-(function() {
-  if (currentLengthFilter) {
-    var _fi  = filterIndexes[currentLengthFilter];
-    var _set = getSentencesForFilter();
-    if (_fi !== undefined) {
-      currentIdx = (_fi < _set.length) ? _fi : Math.max(0, _set.length - 1);
-    }
-  }
-  var _filt = getSentencesForFilter();
-  currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-})();
-
-loadReviewState();    // restore in-progress review session
-loadVoicePref();      // tts.js   — restore selected voice
-loadFuriganaCache();  // kuromoji — load cached furigana readings
-updateDeckUI();       // decks.js — set deck button label + modal content
-applyViewState();     // ui.js    — sync DOM to isListView/isReviewMode flags
+initDecks();         // decks.js  — loads deck data into globals (sentences, srsData, currentIdx)
+loadUIPrefs();       // ui.js     — restores theme, font, toggles, and sets isListView
+loadFilterIndexes(); // app.js    — restores per-filter card positions from localStorage
+loadReviewState();   // app.js    — restores review mode session if one was in progress
+loadVoicePref();     // tts.js    — restores selected voice
+loadFuriganaCache(); // load cached furigana readings from localStorage
+updateDeckUI();      // decks.js  — sets deck button label + modal content
+applyViewState();    // ui.js     — syncs DOM to isListView/isReviewMode flags
 
 if (window.speechSynthesis) { speechSynthesis.onvoiceschanged = function() {}; speechSynthesis.getVoices(); }
 
 render();
 
-// Init kuromoji after first render (~1-2s for dict load)
+// Init kuromoji after first render — loads dict files from ./dict/ (~1-2s first time)
+// When ready: pre-tokenizes all sentences, then re-renders if furigana is ON
 initKuromoji();
 
-// Firebase last — page renders from localStorage first, then cloud overwrites
+// Firebase: init last so page renders instantly from localStorage,
+// then cloud data overwrites if user is signed in.
 if (typeof initFirebase === 'function') initFirebase();

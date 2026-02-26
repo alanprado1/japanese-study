@@ -24,8 +24,7 @@ function saveDeck(id) {
   if (!d) return;
   try {
     localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({
-      name: d.name, sentences: d.sentences, srsData: d.srsData, currentIdx: d.currentIdx,
-      filterIndexes: d.filterIndexes || {}, lengthFilter: d.lengthFilter || ''
+      name: d.name, sentences: d.sentences, srsData: d.srsData, currentIdx: d.currentIdx
     }));
   } catch(e) { console.warn('saveDeck quota exceeded?', e); }
   // Mirror to Firestore if signed in
@@ -68,22 +67,20 @@ function initDecks() {
       Object.keys(meta).forEach(function(id) {
         var data   = loadDeckFromStorage(id);
         decks[id]  = data || { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0 };
-        decks[id].sentences     = decks[id].sentences     || [];
-        decks[id].srsData       = decks[id].srsData       || {};
-        decks[id].currentIdx    = decks[id].currentIdx    || 0;
-        decks[id].filterIndexes = decks[id].filterIndexes || {};
-        decks[id].lengthFilter  = decks[id].lengthFilter  !== undefined ? decks[id].lengthFilter : '';
+        decks[id].sentences  = decks[id].sentences  || [];
+        decks[id].srsData    = decks[id].srsData    || {};
+        decks[id].currentIdx = decks[id].currentIdx || 0;
       });
       var saved = localStorage.getItem('jpStudy_currentDeck');
       currentDeckId = (saved && decks[saved]) ? saved : Object.keys(decks)[0];
     } else {
-      decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
+      decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0 };
       currentDeckId = 'default';
       saveDeck('default');
       saveDeckList();
     }
   } catch(e) {
-    decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
+    decks['default'] = { name: 'Default', sentences: [], srsData: {}, currentIdx: 0 };
     currentDeckId = 'default';
   }
 
@@ -94,81 +91,53 @@ function initDecks() {
 function syncDeckToApp() {
   var d = decks[currentDeckId];
   if (!d) return;
-  sentences      = d.sentences;
-  srsData        = d.srsData;
-  currentIdx     = d.currentIdx || 0;
-  filterIndexes = (d.filterIndexes && typeof d.filterIndexes === 'object') ? d.filterIndexes : {};
-  currentLengthFilter = (d.lengthFilter && d.lengthFilter !== '') ? d.lengthFilter : null;
-  // Always clamp after loading
-  var _filt = getSentencesForFilter();
-  currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-  var key = currentLengthFilter || '';
-  if (filterIndexes[key] === undefined) {
-    filterIndexes[key] = currentIdx;
-    saveFilterIndexes();
-  }
+  sentences  = d.sentences;
+  srsData    = d.srsData;
+  currentIdx = (d.currentIdx < d.sentences.length) ? d.currentIdx : 0;
 }
 
 function syncAppToDeck() {
   var d = decks[currentDeckId];
   if (!d) return;
-  d.sentences    = sentences;
-  d.srsData      = srsData;
-  d.currentIdx   = currentIdx;
-  d.filterIndexes = filterIndexes;
-  d.lengthFilter  = currentLengthFilter || '';
+  d.sentences  = sentences;
+  d.srsData    = srsData;
+  d.currentIdx = currentIdx;
+}
+
+function saveCurrentDeck() {
+  syncAppToDeck();
+  saveDeck(currentDeckId);
 }
 
 // ─── switch ──────────────────────────────────────────────────
 function switchDeck(id) {
-  if (id === currentDeckId) return;
+  if (!decks[id]) return;
+  if (id === currentDeckId) { closeDeckModal(); return; }
 
-  // Save state of current deck first
   syncAppToDeck();
   saveDeck(currentDeckId);
 
   currentDeckId = id;
   localStorage.setItem('jpStudy_currentDeck', id);
   syncDeckToApp();
-  // Check if the loaded filter results in zero cards; reset to 'All' if so
-  var _filt = getSentencesForFilter();
-  if (currentLengthFilter && _filt.length === 0) {
-    currentLengthFilter = null;
-    saveCurrentLengthFilter();
-    _filt = getSentencesForFilter();
-    currentIdx = Math.max(0, Math.min(currentIdx, _filt.length - 1));
-    filterIndexes[''] = currentIdx;
-    saveFilterIndexes();
-  }
-  // Apply the per-filter card position if a filter is active
-  if (currentLengthFilter) {
-    var _fi = filterIndexes[currentLengthFilter];
-    if (_fi !== undefined) {
-      currentIdx = Math.max(0, Math.min(_fi, _filt.length - 1));
-    }
-  }
-  // Reset review mode on deck switch (review is per-deck implicitly)
-  isReviewMode = false;
-  reviewQueue = [];
-  reviewIdx = 0;
-  try {
-    localStorage.setItem('jpStudy_isReviewMode', 'false');
-    localStorage.removeItem('jpStudy_reviewQueueIds');
-    localStorage.removeItem('jpStudy_reviewIdx');
-  } catch(e) {}
+
+  // Push the updated currentDeckId to Firestore NOW (after it's been set)
+  // so a page refresh always restores the correct deck
   if (typeof pushCurrentDeckId === 'function') pushCurrentDeckId();
-  saveDeck(currentDeckId); // Persist any adjustments
+
+  isReviewMode = false;
   resetAudioBtn();
+
   applyViewState();
   render();
   updateDeckUI();
   closeDeckModal();
 }
 
-// ─── create/rename/delete ────────────────────────────────────
+// ─── create / rename / delete ─────────────────────────────────
 function createDeck(name) {
   var id = 'deck_' + Date.now();
-  decks[id] = { name: name, sentences: [], srsData: {}, currentIdx: 0, filterIndexes: {}, lengthFilter: '' };
+  decks[id] = { name: name, sentences: [], srsData: {}, currentIdx: 0 };
   saveDeck(id);
   saveDeckList();
   return id;
@@ -279,7 +248,4 @@ function confirmDeleteDeck(id) {
 }
 
 function openDeckModal()  { renderDeckModal(); document.getElementById('deckModal').classList.add('active'); }
-function closeDeckModal() {
-  document.getElementById('deckModal').classList.remove('active');
-  if (typeof collapseNavOnMobile === 'function') collapseNavOnMobile();
-}
+function closeDeckModal() { document.getElementById('deckModal').classList.remove('active'); }
