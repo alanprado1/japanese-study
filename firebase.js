@@ -34,10 +34,27 @@ function initFirebase() {
 
       if (user) {
         pullFromFirestore().then(function() {
-          // syncDeckToApp sets sentences, srsData, currentIdx, AND
-          // currentLengthFilter all from the deck object — the filter
-          // is stored as part of the deck, not a separate key.
           syncDeckToApp();
+          // After a cloud pull currentDeckId may have changed (e.g. last session
+          // used a different deck on another device). Reload the INCOMING deck's
+          // filter state in the correct order:
+          //   1. Reset in-memory filterIndexes (no old-deck bleed)
+          //   2. Load per-deck filterIndexes for the now-active deck
+          //   3. Load the now-active deck's currentLengthFilter
+          //   4. Apply the correct per-filter card position
+          if (typeof filterIndexes !== 'undefined') filterIndexes = {};
+          if (typeof loadFilterIndexes       === 'function') loadFilterIndexes();
+          if (typeof loadCurrentLengthFilter === 'function') loadCurrentLengthFilter();
+          // Apply the per-filter position now that both indexes and filter are loaded
+          if (typeof filterIndexes !== 'undefined' && typeof getSentencesForFilter === 'function') {
+            var _fi   = filterIndexes[currentLengthFilter || ''];
+            var _filt = getSentencesForFilter();
+            if (_fi !== undefined) {
+              currentIdx = (_fi < _filt.length) ? _fi : Math.max(0, _filt.length - 1);
+            } else {
+              currentIdx = (currentIdx < _filt.length) ? currentIdx : 0;
+            }
+          }
           render();
           updateDeckUI();
         }).catch(function(e) {
@@ -53,30 +70,31 @@ function initFirebase() {
 }
 
 // ─── auth ────────────────────────────────────────────────────
-// signInWithPopup works on all platforms including mobile browsers.
+// Safari's Intelligent Tracking Prevention (ITP) partitions or blocks
+// sessionStorage in certain contexts (pages opened from other apps, Home Screen
+// PWAs, or when "Prevent Cross-Site Tracking" restricts storage). Firebase's
+// signInWithPopup probes sessionStorage before opening the popup; if the probe
+// throws a SecurityError, Firebase throws auth/operation-not-supported-in-this-environment
+// before the popup ever opens.
 //
-// Safari exception: ITP (Intelligent Tracking Prevention) partitions or
-// blocks sessionStorage in certain contexts — pages opened from other apps,
-// Home Screen PWAs, or when "Prevent Cross-Site Tracking" is on. Firebase's
-// signInWithPopup probes sessionStorage before opening the popup; if that
-// probe throws a SecurityError, Firebase raises
-// auth/operation-not-supported-in-this-environment before the popup opens.
+// Fix: detect Safari, probe sessionStorage safely, and if it's blocked switch
+// persistence to NONE (in-memory) before calling signInWithPopup. NONE bypasses
+// the storage probe entirely, so the popup opens normally. The trade-off is that
+// on affected Safari sessions the auth state won't survive a page refresh — but
+// that's fine because onAuthStateChanged + Firestore sync restores data immediately
+// on every sign-in anyway.
 //
-// Fix: detect Safari + probe sessionStorage safely. If blocked, switch
-// persistence to NONE (pure in-memory) before calling signInWithPopup.
-// NONE bypasses the storage probe so the popup opens normally.
-// Trade-off: auth state won't survive a page refresh in that Safari context,
-// but the app re-syncs from Firestore on every sign-in anyway.
+// Chrome and all other browsers are unaffected and continue to use LOCAL persistence.
 
 function _isSafari() {
   var ua = navigator.userAgent;
-  return /Safari/i.test(ua) &&
-    !/Chrome/i.test(ua) &&
-    !/CriOS/i.test(ua) &&
-    !/FxiOS/i.test(ua);
+  // Safari reports "Safari" but NOT "Chrome" or "CriOS" or "FxiOS"
+  return /Safari/i.test(ua) && !/Chrome/i.test(ua) && !/CriOS/i.test(ua) && !/FxiOS/i.test(ua);
 }
 
 function _sessionStorageAvailable() {
+  // Probe sessionStorage safely — Safari ITP throws SecurityError on access
+  // in partitioned contexts; localStorage may also throw in private browsing.
   try {
     var key = '__fbTest__';
     sessionStorage.setItem(key, '1');
@@ -91,6 +109,12 @@ function signInWithGoogle() {
   if (!firebaseReady) return;
   var provider = new firebase.auth.GoogleAuthProvider();
 
+  // On Safari, if sessionStorage is blocked, set persistence to NONE first.
+  // NONE uses pure in-memory storage and bypasses Firebase's storage probe,
+  // allowing signInWithPopup to succeed. On all other browsers (or on Safari
+  // when storage is accessible) use the default LOCAL persistence.
+  var needsNonePersistence = _isSafari() && !_sessionStorageAvailable();
+
   var doSignIn = function() {
     firebaseAuth.signInWithPopup(provider).catch(function(err) {
       // User closed the popup before completing sign-in — not a real error, ignore silently.
@@ -101,12 +125,11 @@ function signInWithGoogle() {
     });
   };
 
-  // On Safari, if sessionStorage is blocked, switch to in-memory persistence
-  // so Firebase's environment check passes and the popup can open.
-  if (_isSafari() && !_sessionStorageAvailable()) {
+  if (needsNonePersistence) {
     firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.NONE)
       .then(doSignIn)
       .catch(function(err) {
+        // Fallback: just try the popup anyway — best effort
         console.warn('setPersistence failed, attempting popup anyway:', err);
         doSignIn();
       });
@@ -170,11 +193,10 @@ function pushDeckToFirestore(deckId) {
 
   // Write full deck data
   batch.set(deckRef, {
-    name:         d.name,
-    sentences:    d.sentences,
-    srsData:      d.srsData,
-    currentIdx:   d.currentIdx,
-    lengthFilter: d.lengthFilter || null
+    name:       d.name,
+    sentences:  d.sentences,
+    srsData:    d.srsData,
+    currentIdx: d.currentIdx
   });
 
   return batch.commit().catch(function(e) {
@@ -253,18 +275,17 @@ function pullFromFirestore() {
         if (!meta[id]) return;
         var d  = deckDoc.data();
         cloudDecks[id] = {
-          name:         d.name         || meta[id].name,
-          sentences:    d.sentences    || [],
-          srsData:      d.srsData      || {},
-          currentIdx:   d.currentIdx   || 0,
-          lengthFilter: d.lengthFilter || null
+          name:       d.name       || meta[id].name,
+          sentences:  d.sentences  || [],
+          srsData:    d.srsData    || {},
+          currentIdx: d.currentIdx || 0
         };
       });
 
       // Any decks in meta without a doc (empty decks)
       Object.keys(meta).forEach(function(id) {
         if (!cloudDecks[id]) {
-          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0, lengthFilter: null };
+          cloudDecks[id] = { name: meta[id].name, sentences: [], srsData: {}, currentIdx: 0 };
         }
       });
 
@@ -295,19 +316,20 @@ function pullFromFirestore() {
         decks[currentDeckId].currentIdx = _prePullIdx;
       }
 
-      // Persist cloud data back to localStorage so next refresh starts fresh correctly.
-      // lengthFilter is included in each deck's localStorage entry so it survives
-      // refreshes without needing a separate key.
+      // NOTE: currentLengthFilter is now restored by loadCurrentLengthFilter()
+      // (deck-scoped key jpStudy_lengthFilter_<deckId>) in the post-pull block
+      // above. The old global jpStudy_lengthFilter key is no longer used.
+
+      // Persist cloud data back to localStorage so next refresh starts fresh correctly
       var deckMeta = {};
       Object.keys(decks).forEach(function(id) {
         deckMeta[id] = { name: decks[id].name };
         try {
           localStorage.setItem('jpStudy_deck_' + id, JSON.stringify({
-            name:         decks[id].name,
-            sentences:    decks[id].sentences,
-            srsData:      decks[id].srsData,
-            currentIdx:   decks[id].currentIdx,
-            lengthFilter: decks[id].lengthFilter || null
+            name:       decks[id].name,
+            sentences:  decks[id].sentences,
+            srsData:    decks[id].srsData,
+            currentIdx: decks[id].currentIdx
           }));
         } catch(e) { console.warn('localStorage write failed for deck', id, e); }
       });
